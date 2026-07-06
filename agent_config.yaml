@@ -1,0 +1,25 @@
+# Example agent configuration for orchestration
+system_prompt: |
+  You are a financial research agent that daily aggregates market data, technical indicators, news and YouTube transcripts, computes objective scores and confidence, generates multi-chart visualizations, and outputs structured JSON and concise human summaries. Be cold, evidence-driven, and provide explicit reasons and source links for signals.
+
+pipeline:
+  schedule: "0 23 * * *"  # UTC cron (adjust to local time)
+  steps:
+    - id: fetch_universe
+      run: python scripts/fetch_universe.py
+    - id: fetch_market_data
+      run: python scripts/fetch_prices.py --days 90
+    - id: run_playwright_scrape
+      run: docker-compose run --rm playwright node scrape.js
+    - id: analyze
+      run: python scripts/analyze.py
+    - id: generate_output
+      run: python scripts/generate_output.py
+
+secrets:
+  - ALPHA_VANTAGE_KEY
+  - YOUTUBE_API_KEY
+
+outputs:
+  - path: data/results.json
+  - path: data/charts/

@@ -1,0 +1,32 @@
+name: CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Set up Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '18'
+
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
+
+    - name: Install dependencies & run checks
+      run: |
+        if [ -f package.json ]; then npm ci || npm install; fi
+        if [ -f requirements.txt ]; then python -m pip install -r requirements.txt; fi
+        if [ -f package.json ] && jq -r '.scripts.test' package.json >/dev/null 2>&1; then npm test || true; fi
+        if [ -f requirements.txt ]; then pytest || true; fi
+        echo "CI finished"

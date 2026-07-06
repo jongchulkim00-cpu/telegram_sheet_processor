@@ -1,0 +1,28 @@
+version: '3.8'
+services:
+  playwright:
+    image: mcr.microsoft.com/playwright:bionic
+    container_name: playwright
+    volumes:
+      - ./playwright_pipeline:/workspace
+      - ./data:/data
+    working_dir: /workspace
+    command: ["node", "scrape.js"]
+    environment:
+      - YOUTUBE_API_KEY=${YOUTUBE_API_KEY}
+    restart: unless-stopped
+
+  processor:
+    build: .
+    image: telegram_sheet_processor:latest
+    container_name: processor
+    volumes:
+      - ./playwright_pipeline:/app/playwright_pipeline
+      - ./data:/app/data
+      - ./prompts:/app/prompts
+    environment:
+      - ALPHA_VANTAGE_KEY=${ALPHA_VANTAGE_KEY}
+      - YOUTUBE_API_KEY=${YOUTUBE_API_KEY}
+    depends_on:
+      - playwright
+    restart: unless-stopped

@@ -1,0 +1,45 @@
+# Node
+node_modules/
+npm-debug.log*
+package-lock.json
+yarn.lock
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+venv/
+.venv/
+env/
+.env
+.env.*
+requirements.txt
+
+# Data and runtime
+/data/
+*.sqlite3
+*.db
+*.log
+
+# OS / editors
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Build
+dist/
+build/
+
+# Secrets
+secrets/
+*.pem
+*.key
+
+# Misc
+coverage/
+.coverage
+coverage.xml
+
+# Playwright local browsers
+playwright/.local-browsers/
