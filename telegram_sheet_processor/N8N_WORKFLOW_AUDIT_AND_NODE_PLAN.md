@@ -273,3 +273,31 @@ scripts/postgres_stock_analysis_schema.sql
 7. `/validate-report`를 별도 본선 HTTP 노드로 분리하고 IF 노드를 추가 - 다음 개선 권장
 8. Groq API 키를 Credential/환경변수로 이동 후 기존 키 회전 - 다음 개선 권장
 9. `trading_log` 대신 `stock_analysis_results` 저장 구조로 확장 - 다음 개선 권장
+
+## 2026-07-13 final guard update
+
+Applied directly to n8n workflow `zSBOieJokf5pEhsj`.
+
+Backup before update:
+
+```text
+/srv/dev-disk-by-uuid-a8321fc8-a540-4512-95ad-303b41f63169/docker_data/n8n_data/database.sqlite.backup.final-code-unicode-20260713-234312
+```
+
+Final `Code in JavaScript` node now:
+
+- Calls `POST http://192.168.1.12:8010/validate-report` before Telegram/Postgres output.
+- Blocks stale analysis dates, including reports dated `2026-07-12` when today is `2026-07-13` KST.
+- Blocks mismatched current prices. Example verified: `399720` report price `58,400` is blocked against public quote `48,800`.
+- Calls `POST http://192.168.1.12:8010/quote` when blocked and replaces the AI report with a verified quote message.
+- Uses Unicode escape sequences in the n8n Code node so Korean labels are not broken by SSH/DB encoding.
+- Telegram node is configured to send `{{ $('Code in JavaScript').item.json.telegram_message }}`.
+
+Verification result:
+
+```text
+/validate-report publishable=false, report_guard_status=blocked
+blocking reason includes:
+- Report analysis date 2026-07-12 does not match today's KST date 2026-07-13.
+- 399720 claimed price 58,400 differs from verified price 48,800.
+```

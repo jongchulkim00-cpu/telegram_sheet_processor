@@ -525,6 +525,104 @@ def find_report_evidence_warnings(report_text):
     return warnings
 
 
+def report_claims_realtime_wording(report_text):
+    text = normalize_report_text(report_text)
+    patterns = [
+        "\ud604\uc7ac\uac00",
+        "\ud604\uc7ac \uc2dc\uc138",
+        "\uc2e4\uc2dc\uac04",
+        "real-time",
+        "realtime",
+        "current price",
+    ]
+    return [pattern for pattern in patterns if pattern.lower() in text.lower()]
+
+
+def report_claims_strict_realtime_wording(report_text):
+    text = normalize_report_text(report_text)
+    patterns = ["\uc2e4\uc2dc\uac04", "real-time", "realtime"]
+    return [pattern for pattern in patterns if pattern.lower() in text.lower()]
+
+
+def extract_report_analysis_dates(report_text):
+    text = normalize_report_text(report_text)
+    label = (
+        "(?:"
+        "\ubd84\uc11d\\s*\uae30\uc900\uc77c|"
+        "\ub370\uc774\ud130\\s*\uae30\uc900\uc77c|"
+        "\uae30\uc900\uc77c|"
+        "analysis\\s*date|as\\s*of"
+        ")"
+    )
+    patterns = [
+        label + "\\s*[:：-]?\\s*([0-9]{4})\\s*\ub144\\s*([0-9]{1,2})\\s*\uc6d4\\s*([0-9]{1,2})\\s*\uc77c",
+        label + r"\s*[:：-]?\s*([0-9]{4})[-./]([0-9]{1,2})[-./]([0-9]{1,2})",
+    ]
+    found = []
+    seen = set()
+    for pattern in patterns:
+        for match in re.finditer(pattern, text, flags=re.IGNORECASE):
+            parsed = parse_report_date(*match.groups())
+            if parsed and parsed.isoformat() not in seen:
+                found.append(parsed)
+                seen.add(parsed.isoformat())
+    return found
+
+
+def extract_claim_fields(text):
+    claimed_price = first_price_after(
+        (
+            "(?:"
+            "\ud604\uc7ac\\s*(?:\uc2dc\uc138|\uac00|\uc8fc\uac00)|"
+            "\ud604\uc7ac\uac00|"
+            "current\\s*(?:price|quote)|market\\s*price|last\\s*price"
+            ")"
+        ),
+        text,
+    )
+    buy_match = re.search(
+        "(?:\ub9e4\uc218.{0,12}?\uad6c\uac04|buy.{0,12}?(?:range|zone|area|low)).{0,80}?"
+        + PRICE_RE
+        + "\\s*(?:~|-|\ubd80\ud130|\uc5d0\uc11c|to)\\s*"
+        + PRICE_RE,
+        text,
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+    buy_low = parse_won(buy_match.group(1)) if buy_match else None
+    buy_high = parse_won(buy_match.group(2)) if buy_match else None
+    target_price = first_price_after("(?:\ubaa9\ud45c\uac00|target\\s*price|price\\s*target|target)", text)
+    stop_loss = first_price_after("(?:\uc190\uc808\uac00|stop\\s*loss|stoploss|cut\\s*loss|risk\\s*line)", text)
+    return {
+        "claimed_price": claimed_price,
+        "buy_low": buy_low,
+        "buy_high": buy_high,
+        "target_price": target_price,
+        "stop_loss": stop_loss,
+    }
+
+
+def find_report_evidence_warnings(report_text):
+    text = normalize_report_text(report_text)
+    evidence_words = [
+        "\ub274\uc2a4",
+        "\uacf5\uc2dc",
+        "\uc218\uc8fc",
+        "\uc13c\ud2f0\uba3c\ud2b8",
+        "Catalyst",
+        "\ucd09\ub9e4\uc81c",
+        "\uc0ac\uc0c1 \ucd5c\ub300",
+        "\ucee8\uc13c\uc11c\uc2a4",
+    ]
+    has_market_claim = any(word in text for word in evidence_words)
+    has_source_link = bool(re.search(r"https?://", text))
+    warnings = []
+    if has_market_claim and not has_source_link:
+        warnings.append(
+            "News/disclosure/sentiment claims exist without source URLs; treat context score as unverified."
+        )
+    return warnings
+
+
 def validate_report_text(report_text, days=260, force=False):
     claims = extract_report_claims(report_text)
     report_analysis_dates = extract_report_analysis_dates(report_text)
