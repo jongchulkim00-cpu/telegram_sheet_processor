@@ -1,0 +1,32 @@
+[
+  {
+    "ticker": "247540",
+    "name": "에코프로비엠",
+    "target_price": 220000,
+    "stop_loss": 165000
+  },
+  {
+    "ticker": "196170",
+    "name": "알테오젠",
+    "target_price": 380000,
+    "stop_loss": 290000
+  },
+  {
+    "ticker": "403870",
+    "name": "HPSP",
+    "target_price": 55000,
+    "stop_loss": 42000
+  },
+  {
+    "ticker": "214150",
+    "name": "클래시스",
+    "target_price": 65000,
+    "stop_loss": 48000
+  },
+  {
+    "ticker": "277810",
+    "name": "레인보우로보틱스",
+    "target_price": 180000,
+    "stop_loss": 135000
+  }
+]

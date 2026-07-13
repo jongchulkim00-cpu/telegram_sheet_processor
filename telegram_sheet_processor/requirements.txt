@@ -1,0 +1,9 @@
+finance-datareader
+pykrx
+python-kis
+pandas
+numpy
+plotly
+requests
+fastapi
+uvicorn

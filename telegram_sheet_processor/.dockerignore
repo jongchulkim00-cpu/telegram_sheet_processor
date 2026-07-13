@@ -1,0 +1,12 @@
+.git
+__pycache__
+*.pyc
+.env
+outputs
+data/cache
+data/**/*.csv
+data/**/*.html
+data/**/*.json
+data/**/*.txt
+*.zip
+

@@ -1,0 +1,35 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.env
+.env*
+!.env.example
+!**/.env.example
+*.venv
+.venv/
+.venv2/
+
+# Jupyter
+.ipynb_checkpoints
+
+# Data
+/data/
+telegram_sheet_processor/data/cache/
+telegram_sheet_processor/outputs/
+*.sqlite3
+
+# VS Code
+.vscode/
+
+# OS
+Thumbs.db
+.DS_Store
+
+# Logs
+*.log
+
+# Secret files
+*secret*
+*credentials*
