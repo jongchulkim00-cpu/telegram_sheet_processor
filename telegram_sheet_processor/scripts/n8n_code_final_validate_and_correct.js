@@ -19,10 +19,34 @@ function todayKorean() {
 }
 
 function parseDbData(text) {
-  const match = text.match(/<json>([\s\S]*?)<\/json>/);
-  if (!match) return { symbol: "N/A", score: 0, decision: "Neutral", target_price: 0, stop_loss: 0 };
+  const candidates = [];
+  const tagged = text.match(/<json>([\s\S]*?)<\/json>/);
+  if (tagged) candidates.push(tagged[1]);
+
+  const fencedMatches = [...text.matchAll(/```json\s*([\s\S]*?)```/gi)];
+  for (const match of fencedMatches) candidates.push(match[1]);
+
+  const normalizeRow = (parsed) => {
+    if (!parsed || typeof parsed !== "object") return null;
+    if (parsed.symbol || parsed.ticker) return parsed;
+    for (const value of Object.values(parsed)) {
+      if (value && typeof value === "object" && (value.symbol || value.ticker)) {
+        return value;
+      }
+    }
+    return null;
+  };
+
+  if (!candidates.length) return { symbol: "N/A", score: 0, decision: "Neutral", target_price: 0, stop_loss: 0 };
   try {
-    const parsed = JSON.parse(match[1]);
+    let parsed = null;
+    for (const candidate of candidates) {
+      try {
+        parsed = normalizeRow(JSON.parse(candidate));
+        if (parsed) break;
+      } catch (error) {}
+    }
+    if (!parsed) return { symbol: "N/A", score: 0, decision: "Neutral", target_price: 0, stop_loss: 0 };
     return {
       symbol: String(parsed.symbol || parsed.ticker || "N/A").slice(0, 50),
       score: Number(parsed.score || 0),
@@ -36,12 +60,19 @@ function parseDbData(text) {
 }
 
 function cleanReport(text) {
-  return text.replace(/<json>[\s\S]*?<\/json>/g, "").trim();
+  return text
+    .replace(/<json>[\s\S]*?<\/json>/g, "")
+    .replace(/```json\s*[\s\S]*?```/gi, "")
+    .trim();
 }
 
 function extractFirstTicker(text) {
   const match = text.match(/\b\d{6}\b/);
   return match ? match[0] : "";
+}
+
+function extractAllTickers(text) {
+  return [...new Set((text.match(/\b\d{6}\b/g) || []))];
 }
 
 function extractReportDate(text) {
@@ -131,10 +162,15 @@ return await (async () => {
   try {
     const dbData = parseDbData(fullOutput);
     const cleanMessage = cleanReport(fullOutput);
-    const ticker = extractFirstTicker(cleanMessage) || dbData.symbol;
+    const allTickers = extractAllTickers(cleanMessage);
+    const ticker = allTickers[0] || dbData.symbol;
     const expectedDate = todayKstIso();
     const reportDate = extractReportDate(cleanMessage);
     const localReasons = [];
+
+    if (!reportDate) {
+      localReasons.push("\uBCF4\uACE0\uC11C\uC5D0 '\uBD84\uC11D \uAE30\uC900\uC77C:' \uB77C\uBCA8\uC774 \uC5C6\uC5B4 \uB0A0\uC9DC \uAC80\uC99D\uC774 \uBD88\uC644\uC804\uD569\uB2C8\uB2E4.");
+    }
 
     if (reportDate && reportDate !== expectedDate) {
       localReasons.push(`\uBCF4\uACE0\uC11C \uBD84\uC11D \uAE30\uC900\uC77C ${reportDate}\uAC00 \uC624\uB298 KST \uAE30\uC900\uC77C ${expectedDate}\uC640 \uB2E4\uB985\uB2C8\uB2E4.`);
@@ -152,7 +188,11 @@ return await (async () => {
     const blocked = !validation?.ok || validation.publishable === false || reasons.length > 0;
 
     if (blocked) {
-      const blockedTickers = extractBlockedTickers(validation, ticker);
+      let blockedTickers = extractBlockedTickers(validation, ticker);
+      const apiReasonCount = Array.isArray(validation?.blocking_reasons) ? validation.blocking_reasons.length : 0;
+      if (localReasons.length && apiReasonCount === 0 && allTickers.length) {
+        blockedTickers = allTickers;
+      }
       const quotes = await fetchQuotes.call(this, blockedTickers);
       return [{
         json: {

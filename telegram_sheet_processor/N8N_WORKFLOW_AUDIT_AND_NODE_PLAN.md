@@ -331,3 +331,41 @@ Verification:
 011790 claimed price 359,500 vs verified 88,000 -> blocked
 New blocked_tickers should include 011790, not 039030.
 ```
+
+## 2026-07-14 strict report format update
+
+Applied directly to n8n workflow `zSBOieJokf5pEhsj`.
+
+Backups before updates:
+
+```text
+/srv/dev-disk-by-uuid-a8321fc8-a540-4512-95ad-303b41f63169/docker_data/n8n_data/database.sqlite.backup.strict-report-format-20260714-000248
+/srv/dev-disk-by-uuid-a8321fc8-a540-4512-95ad-303b41f63169/docker_data/n8n_data/database.sqlite.backup.strict-report-format-sync-20260714-000344
+```
+
+Reason:
+
+- AI Agent output can be analytically correct while still missing strict workflow labels.
+- Example output said it was based on `2026-07-13` close data, but did not start with exact `analysis_date` and `data_as_of` labels.
+- The DB parser only expected `<json>...</json>`, while the AI returned a fenced ```json block with multiple symbols.
+
+Fix:
+
+- AI Agent prompt now requires reports to start with:
+  - `analysis_date` label
+  - `data_as_of` label
+- AI Agent prompt now forbids replacing those labels with narrative wording.
+- AI Agent prompt now requires DB JSON inside `<json>...</json>`.
+- Final Code node can parse both `<json>` and legacy fenced ```json blocks, choosing the first valid symbol row for current single-row Postgres storage.
+- Final Code node removes fenced JSON from Telegram text.
+- Final Code node blocks reports without an explicit analysis-date label and shows reference prices for all tickers when the issue is report format, not a specific ticker mismatch.
+
+Verification:
+
+```text
+039030 and 011790 API values match the AI output:
+- 039030 close/current: 359,500, RSI 33.61, SMA20 438,675
+- 011790 close/current: 88,000, RSI 34.45, SMA20 108,085, SMA60 125,643
+
+Remaining issue was format, not price correctness.
+```
