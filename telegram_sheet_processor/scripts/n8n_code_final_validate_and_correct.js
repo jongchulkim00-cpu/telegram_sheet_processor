@@ -58,6 +58,33 @@ function buildReasonLines(validation, localReasons) {
   return [...localReasons, ...apiReasons].filter(Boolean).slice(0, 12);
 }
 
+function extractBlockedTickers(validation, fallbackTicker) {
+  const tickers = [];
+  const addTicker = (ticker) => {
+    const normalized = String(ticker || "").trim();
+    if (/^\d{6}$/.test(normalized) && !tickers.includes(normalized)) {
+      tickers.push(normalized);
+    }
+  };
+
+  const results = validation?.price_verification?.results;
+  if (Array.isArray(results)) {
+    for (const row of results) {
+      const failed = row?.tradable === false || !["matched", "VERIFIED"].includes(String(row?.claim_status || row?.decision || ""));
+      if (failed) addTicker(row?.ticker || row?.symbol);
+    }
+  }
+
+  const reasons = Array.isArray(validation?.blocking_reasons) ? validation.blocking_reasons : [];
+  for (const reason of reasons) {
+    const match = String(reason).match(/\b\d{6}\b/);
+    if (match) addTicker(match[0]);
+  }
+
+  if (!tickers.length) addTicker(fallbackTicker);
+  return tickers;
+}
+
 async function fetchQuote(ticker) {
   if (!ticker) return null;
   try {
@@ -74,12 +101,24 @@ async function fetchQuote(ticker) {
   }
 }
 
-function correctedMessage(quote, reasons) {
-  const base = quote?.message || [
+async function fetchQuotes(tickers) {
+  const quotes = [];
+  for (const ticker of tickers) {
+    const quote = await fetchQuote.call(this, ticker);
+    if (quote) quotes.push(quote);
+  }
+  return quotes;
+}
+
+function correctedMessage(quotes, reasons) {
+  const quoteList = Array.isArray(quotes) ? quotes : (quotes ? [quotes] : []);
+  const base = quoteList.length ? quoteList.map((quote) => quote.message).join("\n\n") : [
     `\uC624\uB298(${todayKorean()}) \uAE30\uC900 \uAC80\uC99D \uAC00\uB2A5\uD55C \uD604\uC7AC\uAC00\uB97C \uB2E4\uC2DC \uC870\uD68C\uD574\uC57C \uD569\uB2C8\uB2E4.`,
   ].join("\n");
   return [
     "\uAE30\uC874 AI \uBCF4\uACE0\uC11C\uB294 \uB0A0\uC9DC \uB610\uB294 \uAC00\uACA9 \uAC80\uC99D \uC2E4\uD328\uB85C \uC804\uC1A1\uC744 \uCC28\uB2E8\uD588\uC2B5\uB2C8\uB2E4.",
+    "",
+    "\uAC80\uC99D \uC2E4\uD328 \uC885\uBAA9\uC758 \uD604\uC7AC \uAE30\uC900\uAC00:",
     "",
     base,
     "",
@@ -113,14 +152,16 @@ return await (async () => {
     const blocked = !validation?.ok || validation.publishable === false || reasons.length > 0;
 
     if (blocked) {
-      const quote = await fetchQuote.call(this, ticker);
+      const blockedTickers = extractBlockedTickers(validation, ticker);
+      const quotes = await fetchQuotes.call(this, blockedTickers);
       return [{
         json: {
           db_data: { symbol: "BLOCKED", score: 0, decision: "Blocked", target_price: 0, stop_loss: 0 },
-          telegram_message: correctedMessage(quote, reasons),
+          telegram_message: correctedMessage(quotes, reasons),
           can_publish: false,
           validation,
-          quote,
+          blocked_tickers: blockedTickers,
+          quotes,
           original_report: cleanMessage,
         },
       }];

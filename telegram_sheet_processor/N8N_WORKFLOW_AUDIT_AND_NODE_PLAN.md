@@ -301,3 +301,33 @@ blocking reason includes:
 - Report analysis date 2026-07-12 does not match today's KST date 2026-07-13.
 - 399720 claimed price 58,400 differs from verified price 48,800.
 ```
+
+## 2026-07-13 blocked ticker quote fix
+
+Applied directly to n8n workflow `zSBOieJokf5pEhsj`.
+
+Backup before update:
+
+```text
+/srv/dev-disk-by-uuid-a8321fc8-a540-4512-95ad-303b41f63169/docker_data/n8n_data/database.sqlite.backup.blocked-ticker-quote-20260713-235719
+```
+
+Reason:
+
+- A blocked multi-stock report could show the first ticker quote while the blocking reason belonged to a different ticker.
+- Example: `039030` quote was shown while `011790` was the mismatched ticker.
+
+Fix:
+
+- The final Code node now extracts failed tickers from `/validate-report.price_verification.results` and `blocking_reasons`.
+- When blocked, it fetches `/quote` only for the failed ticker list.
+- Telegram now shows current reference prices for failed ticker(s), not the first ticker in the report.
+- Telegram node has `appendAttribution=false` to remove the automatic n8n footer when supported by the node.
+
+Verification:
+
+```text
+039030 claimed/current price 359,500 -> matched
+011790 claimed price 359,500 vs verified 88,000 -> blocked
+New blocked_tickers should include 011790, not 039030.
+```
