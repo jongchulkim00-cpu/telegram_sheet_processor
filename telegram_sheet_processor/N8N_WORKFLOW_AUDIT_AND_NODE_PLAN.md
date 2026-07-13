@@ -2,6 +2,14 @@
 
 점검일: 2026-07-13
 
+적용 상태: 2026-07-13 23:29 KST 기준 live n8n workflow 보강 완료
+
+백업:
+
+```text
+/srv/dev-disk-by-uuid-a8321fc8-a540-4512-95ad-303b41f63169/docker_data/n8n_data/database.sqlite.backup.stock-guard-20260713-232906
+```
+
 ## 현재 워크플로우 상태
 
 - 워크플로우명: `My workflow`
@@ -256,9 +264,12 @@ scripts/postgres_stock_analysis_schema.sql
 
 ## 우선순위 수정 제안
 
-1. AI Agent 시스템 프롬프트에 `scripts/n8n_ai_agent_stock_guard_prompt.md` 내용 추가
-2. 기존 `mcp-stock-analyze`를 `8010/analyze` 기반 `stock-analyze-verified`로 교체
-3. `/validate-report`를 AI Agent 뒤 본선에 추가
-4. `Price Guard` + IF 노드로 Telegram/Postgres 전송 차단
-5. Groq API 키를 Credential/환경변수로 이동 후 기존 키 회전
-6. `trading_log` 대신 `stock_analysis_results` 저장 구조로 확장
+1. AI Agent 시스템 프롬프트에 `scripts/n8n_ai_agent_router_system_prompt_integrated.md` 내용 추가 - 적용 완료
+2. 기존 `mcp-stock-analyze`를 `8010/analyze` 기반 `stock-analyze-verified`로 교체 - 적용 완료
+3. `stock-source-status` GET 도구 추가 - 적용 완료
+4. `stock-quote-current` POST 도구 추가 - 적용 완료
+5. 기존 `Code in JavaScript` 노드에 `/validate-report` 최종 검증 호출 추가 - 적용 완료
+6. 검증 실패 시 Telegram에 원문 보고서 대신 차단 사유를 전송하도록 변경 - 적용 완료
+7. `/validate-report`를 별도 본선 HTTP 노드로 분리하고 IF 노드를 추가 - 다음 개선 권장
+8. Groq API 키를 Credential/환경변수로 이동 후 기존 키 회전 - 다음 개선 권장
+9. `trading_log` 대신 `stock_analysis_results` 저장 구조로 확장 - 다음 개선 권장
