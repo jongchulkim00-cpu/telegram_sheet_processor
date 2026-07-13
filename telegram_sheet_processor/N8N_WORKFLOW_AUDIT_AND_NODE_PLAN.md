@@ -369,3 +369,43 @@ Verification:
 
 Remaining issue was format, not price correctness.
 ```
+
+## 2026-07-14 validate-report parser fix
+
+Applied to running stock API container `telegram-sheet-stock-api`.
+
+Container backup before update:
+
+```text
+/app/scripts/market_data.py.backup.20260714-000954
+```
+
+Reason:
+
+- `/validate-report` treated `data_as_of` / `데이터 기준일` as an analysis date because the parser matched the generic Korean label `기준일`.
+- In markdown tables, the parser could miss the price in the same row as a ticker and fall back to the first price in the whole report.
+- Example failure:
+  - Correct row: `SKC | 011790 | 88,000원`
+  - Incorrect claim extracted before fix: `011790 claimed_price=359,500`
+
+Fix:
+
+- Analysis date extraction now only accepts explicit analysis labels, not generic data-date labels.
+- Markdown table rows now extract the first price on the same line after each ticker before falling back to broader parsing.
+
+Verification:
+
+```text
+Input report:
+- analysis_date: 2026-07-14
+- data_as_of: 2026-07-13
+- 039030 price: 359,500
+- 011790 price: 88,000
+
+/validate-report result:
+- publishable=true
+- report_analysis_dates=["2026-07-14"]
+- 039030 claimed_price=359500
+- 011790 claimed_price=88000
+- blocking_reasons=[]
+```

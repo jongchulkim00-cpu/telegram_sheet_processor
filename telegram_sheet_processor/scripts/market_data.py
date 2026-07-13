@@ -483,6 +483,17 @@ def extract_claim_fields(text):
     }
 
 
+def first_price_in_same_line(text, start_pos=0):
+    line_start = text.rfind("\n", 0, start_pos) + 1
+    line_end = text.find("\n", start_pos)
+    if line_end == -1:
+        line_end = len(text)
+    line = text[line_start:line_end]
+    local_start = max(0, start_pos - line_start)
+    match = re.search(PRICE_RE, line[local_start:])
+    return parse_won(match.group(1)) if match else None
+
+
 def extract_report_claims(report_text):
     text = normalize_report_text(report_text)
     ticker_matches = []
@@ -501,6 +512,10 @@ def extract_report_claims(report_text):
         end = ticker_matches[idx + 1][1] if idx + 1 < len(ticker_matches) else len(text)
         segment = text[start:end]
         fields = extract_claim_fields(segment)
+        if fields.get("claimed_price") is None:
+            row_price = first_price_in_same_line(text, start)
+            if row_price is not None:
+                fields["claimed_price"] = row_price
         if all(value is None for value in fields.values()):
             fields = extract_claim_fields(text)
         name = lookup_pykrx_name(ticker) or ticker
@@ -549,9 +564,8 @@ def extract_report_analysis_dates(report_text):
     label = (
         "(?:"
         "\ubd84\uc11d\\s*\uae30\uc900\uc77c|"
-        "\ub370\uc774\ud130\\s*\uae30\uc900\uc77c|"
-        "\uae30\uc900\uc77c|"
-        "analysis\\s*date|as\\s*of"
+        "\ubd84\uc11d\uc77c|"
+        "analysis\\s*date"
         ")"
     )
     patterns = [
