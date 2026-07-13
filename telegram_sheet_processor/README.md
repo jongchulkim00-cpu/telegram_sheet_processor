@@ -208,6 +208,13 @@ n8n 연결 순서:
 
 현재 KIS 자격증명이 없으면 이 메시지는 `실시간 현재가`가 아니라 `공개 현재가`로 표시됩니다. KIS가 설정되어 `broker_realtime_enabled=true`가 되면 실시간 표현을 사용할 수 있습니다.
 
+n8n 전체 노드 점검/분업화 문서:
+- `N8N_WORKFLOW_AUDIT_AND_NODE_PLAN.md`: 현재 워크플로우 문제점과 목표 구조
+- `N8N_HTTP_NODE_CONFIGS.md`: GET/POST 노드별 설정값
+- `scripts/n8n_ai_agent_router_system_prompt_integrated.md`: AI Agent Router 통합 시스템 프롬프트
+- `scripts/n8n_code_price_guard.js`: 전송 차단 게이트
+- `scripts/n8n_code_quote_message.js`: 현재가 텔레그램 메시지 변환
+
 캐시 상태 확인:
 ```powershell
 curl "http://localhost:8010/cache-audit?tickers=039030,011790"
