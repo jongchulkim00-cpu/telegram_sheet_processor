@@ -409,3 +409,38 @@ Input report:
 - 011790 claimed_price=88000
 - blocking_reasons=[]
 ```
+
+## 2026-07-14 informational market report route
+
+Applied directly to n8n workflow `zSBOieJokf5pEhsj`.
+
+Backup before update:
+
+```text
+/srv/dev-disk-by-uuid-a8321fc8-a540-4512-95ad-303b41f63169/docker_data/n8n_data/database.sqlite.backup.info-report-date-route-20260714-211646
+```
+
+Reason:
+
+- A broad market/macro request can produce a useful report without a 6-digit Korean stock ticker.
+- The final Code node previously sent every AI response to `/validate-report`, so market-context reports were blocked with `No 6-digit Korean stock ticker was found`.
+- When the AI used natural wording such as "today", the final report also lacked the strict `analysis_date` label.
+
+Fix:
+
+- Final Code node now separates stock-specific reports from informational market-context reports.
+- If no ticker and no explicit stock price claim are present, the report is treated as `informational_no_ticker`.
+- The Code node prepends KST date labels:
+  - `analysis_date`
+  - `data_as_of`
+- If a report contains a stock price claim without a ticker, it still remains blocked.
+
+Expected behavior:
+
+```text
+Input: "오늘 날짜 중요한 이슈 주식 흐름 정리"
+Output should be sent, not blocked, with:
+- analysis_date: KST today
+- data_as_of: KST today
+- validation.report_guard_status=informational_no_ticker
+```

@@ -66,6 +66,18 @@ function cleanReport(text) {
     .trim();
 }
 
+function ensureDateHeader(text) {
+  const trimmed = String(text || "").trim();
+  const hasAnalysisLabel = /(?:\uBD84\uC11D\s*\uAE30\uC900\uC77C|analysis\s*date)\s*[:\uFF1A-]?/i.test(trimmed);
+  if (hasAnalysisLabel) return trimmed;
+  return [
+    `\uBD84\uC11D \uAE30\uC900\uC77C: ${todayKstIso()}`,
+    `\uB370\uC774\uD130 \uAE30\uC900\uC77C: ${todayKstIso()}`,
+    "",
+    trimmed,
+  ].join("\n");
+}
+
 function extractFirstTicker(text) {
   const match = text.match(/\b\d{6}\b/);
   return match ? match[0] : "";
@@ -76,12 +88,16 @@ function extractAllTickers(text) {
 }
 
 function extractReportDate(text) {
-  const label = "(?:\\uBD84\\uC11D\\s*\\uAE30\\uC900\\uC77C|\\uB370\\uC774\\uD130\\s*\\uAE30\\uC900\\uC77C|\\uAE30\\uC900\\uC77C|analysis\\s*date|as\\s*of)";
+  const label = "(?:\\uBD84\\uC11D\\s*\\uAE30\\uC900\\uC77C|\\uBD84\\uC11D\\uC77C|analysis\\s*date)";
   const kr = text.match(new RegExp(`${label}\\s*[:\uFF1A-]?\\s*(\\d{4})\\s*\\uB144\\s*(\\d{1,2})\\s*\\uC6D4\\s*(\\d{1,2})\\s*\\uC77C`, "i"));
   if (kr) return `${kr[1]}-${String(kr[2]).padStart(2, "0")}-${String(kr[3]).padStart(2, "0")}`;
   const iso = text.match(new RegExp(`${label}\\s*[:\uFF1A-]?\\s*(\\d{4})[-./](\\d{1,2})[-./](\\d{1,2})`, "i"));
   if (iso) return `${iso[1]}-${String(iso[2]).padStart(2, "0")}-${String(iso[3]).padStart(2, "0")}`;
   return "";
+}
+
+function hasStockPriceClaimWithoutTicker(text) {
+  return /(?:\uD604\uC7AC\uAC00|\uD604\uC7AC\s*\uC2DC\uC138|current\s*(?:price|quote)).{0,80}?([0-9]{1,3}(?:,[0-9]{3})+|[0-9]+)\s*\uC6D0/i.test(text);
 }
 
 function buildReasonLines(validation, localReasons) {
@@ -161,12 +177,31 @@ function correctedMessage(quotes, reasons) {
 return await (async () => {
   try {
     const dbData = parseDbData(fullOutput);
-    const cleanMessage = cleanReport(fullOutput);
+    let cleanMessage = cleanReport(fullOutput);
     const allTickers = extractAllTickers(cleanMessage);
     const ticker = allTickers[0] || dbData.symbol;
     const expectedDate = todayKstIso();
     const reportDate = extractReportDate(cleanMessage);
     const localReasons = [];
+
+    if (!allTickers.length && !hasStockPriceClaimWithoutTicker(cleanMessage)) {
+      const messageWithDate = ensureDateHeader(cleanMessage);
+      return [{
+        json: {
+          db_data: { symbol: "INFO", score: 0, decision: "MarketContext", target_price: 0, stop_loss: 0 },
+          telegram_message: messageWithDate,
+          can_publish: true,
+          validation: {
+            ok: true,
+            publishable: true,
+            report_guard_status: "informational_no_ticker",
+            expected_analysis_date: expectedDate,
+            note: "No stock ticker or stock price claim found; treated as market context, not a per-stock investment report.",
+          },
+          original_report: cleanMessage,
+        },
+      }];
+    }
 
     if (!reportDate) {
       localReasons.push("\uBCF4\uACE0\uC11C\uC5D0 '\uBD84\uC11D \uAE30\uC900\uC77C:' \uB77C\uBCA8\uC774 \uC5C6\uC5B4 \uB0A0\uC9DC \uAC80\uC99D\uC774 \uBD88\uC644\uC804\uD569\uB2C8\uB2E4.");
