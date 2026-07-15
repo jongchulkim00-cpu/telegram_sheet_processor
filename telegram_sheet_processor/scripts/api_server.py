@@ -269,6 +269,36 @@ def api_error(error: Exception, payload: Optional[dict[str, Any]] = None) -> dic
     }
 
 
+def directory_usage(path: Path) -> dict[str, Any]:
+    total_bytes = 0
+    file_count = 0
+    newest_mtime = None
+    exists = path.exists()
+    if exists:
+        for item in path.rglob("*"):
+            if not item.is_file():
+                continue
+            try:
+                stat = item.stat()
+            except OSError:
+                continue
+            total_bytes += stat.st_size
+            file_count += 1
+            newest_mtime = stat.st_mtime if newest_mtime is None else max(newest_mtime, stat.st_mtime)
+    return {
+        "path": str(path),
+        "exists": exists,
+        "file_count": file_count,
+        "total_bytes": total_bytes,
+        "total_mb": round(total_bytes / 1024 / 1024, 2),
+        "newest_file_mtime": (
+            datetime.fromtimestamp(newest_mtime, tz=timezone.utc).replace(microsecond=0).isoformat()
+            if newest_mtime is not None
+            else None
+        ),
+    }
+
+
 async def read_json_body(request: Request) -> dict[str, Any]:
     try:
         payload = await request.json()
@@ -989,6 +1019,39 @@ def health() -> dict[str, Any]:
         "max_data_age_days": market_data.MAX_DATA_AGE_DAYS,
         "allow_stale_cache": market_data.ALLOW_STALE_CACHE,
         "port_policy": "Use existing service port only; no additional port is required.",
+    })
+
+
+@app.get("/storage/status")
+def storage_status() -> dict[str, Any]:
+    data_usage = directory_usage(market_data.DATA_DIR)
+    output_usage = directory_usage(market_data.OUTPUT_DIR)
+    cache_usage = directory_usage(market_data.CACHE_DIR)
+    return api_success({
+        "analysis_date": market_data.today_kst().isoformat(),
+        "storage": {
+            "data": data_usage,
+            "cache": cache_usage,
+            "outputs": output_usage,
+            "total_mb": round(
+                data_usage["total_bytes"] / 1024 / 1024
+                + output_usage["total_bytes"] / 1024 / 1024,
+                2,
+            ),
+        },
+        "docker_volume_policy": {
+            "data_mount": "${STOCK_DATA_DIR:-./data}:/app/data",
+            "output_mount": "${STOCK_OUTPUT_DIR:-./outputs}:/app/outputs",
+            "nas_recommendation": (
+                "Use NAS-backed STOCK_DATA_DIR and STOCK_OUTPUT_DIR on the home server. "
+                "Keep the database/cache close to the container for speed; avoid slow remote mounts for high-frequency intraday writes."
+            ),
+        },
+        "retention_policy": {
+            "daily_ohlcv": "safe to keep long term; small footprint for KOSPI/KOSDAQ daily history.",
+            "intraday_30m": "moderate footprint; store compressed/parquet or csv by ticker/date when Kiwoom intraday is connected.",
+            "raw_tick": "do not store by default unless a specific strategy requires it; storage and write volume grow quickly.",
+        },
     })
 
 

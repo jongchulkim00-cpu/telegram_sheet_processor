@@ -162,6 +162,16 @@ class PreviewReviewApiTests(unittest.TestCase):
         self.assertFalse(status["automation"]["allow_live_orders"])
         self.assertIn("Actual Kiwoom order submission", status["order_execution_policy"])
 
+    def test_storage_status_reports_volume_policy(self):
+        status = api_server.storage_status()
+
+        self.assertTrue(status["ok"])
+        self.assertIn("storage", status)
+        self.assertIn("data", status["storage"])
+        self.assertIn("outputs", status["storage"])
+        self.assertIn("STOCK_DATA_DIR", status["docker_volume_policy"]["data_mount"])
+        self.assertIn("intraday_30m", status["retention_policy"])
+
 
 if __name__ == "__main__":
     unittest.main()
