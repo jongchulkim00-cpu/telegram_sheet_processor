@@ -140,9 +140,26 @@ def _broker_realtime_available(quote: dict[str, Any] | None) -> bool:
     label = str(quote.get("quote_label") or quote.get("priority") or quote.get("provider") or "")
     source = str(quote.get("quote_source") or quote.get("provider") or "")
     raw = quote.get("raw") if isinstance(quote.get("raw"), dict) else {}
-    return any(token in f"{label} {source}".lower() for token in ["kiwoom", "kis", "broker_realtime"]) or bool(
-        raw.get("realtime")
+    nested_public = quote.get("public_quote") if isinstance(quote.get("public_quote"), dict) else {}
+    nested_raw = nested_public.get("raw") if isinstance(nested_public.get("raw"), dict) else {}
+    haystack = " ".join(
+        str(value).lower()
+        for value in [
+            source,
+            raw.get("source"),
+            raw.get("provider"),
+            raw.get("priority"),
+            nested_public.get("provider"),
+            nested_public.get("priority"),
+            nested_raw.get("source"),
+            nested_raw.get("provider"),
+            nested_raw.get("priority"),
+        ]
+        if value is not None
     )
+    broker_source = "kiwoom" in haystack or "kis" in haystack or "broker_kiwoom_rest" in haystack
+    explicit_realtime = bool(raw.get("realtime") or nested_public.get("realtime") or nested_raw.get("realtime"))
+    return label == "broker_realtime" and (broker_source or explicit_realtime)
 
 
 def evaluate_candidate(

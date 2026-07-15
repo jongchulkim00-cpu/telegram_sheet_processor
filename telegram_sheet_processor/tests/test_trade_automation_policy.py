@@ -104,6 +104,35 @@ class TradeAutomationPolicyTests(unittest.TestCase):
         self.assertFalse(result["can_submit_order"])
         self.assertTrue(any("do not open a new buy position" in item for item in result["blockers"]))
 
+    def test_naver_fallback_is_not_accepted_as_broker_realtime_even_with_bad_label(self):
+        settings = trade_automation_policy.AutomationSettings(
+            mode="approval_required",
+            initial_order_budget_krw=100000,
+            require_human_approval=True,
+            allow_live_orders=False,
+            require_broker_realtime=True,
+            require_intraday_signal=False,
+        )
+
+        result = trade_automation_policy.evaluate_candidate(
+            self.sample_review(),
+            quote={
+                "quote_price": 89100,
+                "quote_label": "broker_realtime",
+                "quote_source": "naver_finance_public",
+                "public_quote": {
+                    "provider": "naver_finance_public",
+                    "priority": "public_naver",
+                    "realtime": False,
+                },
+            },
+            settings=settings,
+        )
+
+        self.assertFalse(result["broker_realtime_available"])
+        self.assertFalse(result["requires_human_approval"])
+        self.assertIn("broker realtime quote is not confirmed.", result["blockers"])
+
 
 if __name__ == "__main__":
     unittest.main()
