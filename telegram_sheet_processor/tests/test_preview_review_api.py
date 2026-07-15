@@ -20,6 +20,9 @@ class PreviewReviewApiTests(unittest.TestCase):
         self.assertIn("preview-review-batch", html)
         self.assertIn("batchItems", html)
         self.assertIn("review-roadmap", html)
+        self.assertIn("review-watchlist", html)
+        self.assertIn("loadWatchlist", html)
+        self.assertIn("saveWatchlist", html)
         self.assertIn("include_quote=true", html)
         self.assertIn("ticker", html)
         self.assertIn("BUY", html)
@@ -55,7 +58,29 @@ class PreviewReviewApiTests(unittest.TestCase):
 
         self.assertGreater(len(roadmap["completed"]), 1)
         self.assertGreater(len(roadmap["next"]), 1)
-        self.assertIn("관심종목", roadmap["in_progress"][0])
+        self.assertIn("섹터", roadmap["in_progress"][0])
+
+    def test_review_watchlist_save_load_normalizes_duplicates(self):
+        original_path = api_server.REVIEW_WATCHLIST_PATH
+        temp_path = PROJECT_ROOT / "data" / "test_review_watchlist.json"
+        api_server.REVIEW_WATCHLIST_PATH = temp_path
+        try:
+            saved = api_server.save_review_watchlist([
+                {"ticker": "042700", "name": "한미반도체"},
+                {"ticker": "042700", "name": "중복"},
+                {"symbol": "080220", "name": "제주반도체"},
+                {"ticker": ""},
+            ])
+            loaded = api_server.load_review_watchlist()
+
+            self.assertEqual(saved, loaded)
+            self.assertEqual(len(loaded), 2)
+            self.assertEqual(loaded[0]["ticker"], "042700")
+            self.assertEqual(loaded[1]["ticker"], "080220")
+        finally:
+            api_server.REVIEW_WATCHLIST_PATH = original_path
+            if temp_path.exists():
+                temp_path.unlink()
 
 
 if __name__ == "__main__":

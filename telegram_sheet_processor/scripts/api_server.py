@@ -53,6 +53,13 @@ DEFAULT_KR_ITEMS = [
     {"ticker": "196170", "name": "알테오젠", "market": "KOSDAQ"},
     {"ticker": "247540", "name": "에코프로비엠", "market": "KOSDAQ"},
 ]
+REVIEW_WATCHLIST_PATH = market_data.DATA_DIR / "review_watchlist.json"
+REVIEW_WATCHLIST_LIMIT = 50
+DEFAULT_REVIEW_WATCHLIST = [
+    {"ticker": "080220", "name": "제주반도체"},
+    {"ticker": "399720", "name": "가온칩스"},
+    {"ticker": "042700", "name": "한미반도체"},
+]
 
 app = FastAPI(
     title="Korean Stock Precision API",
@@ -157,6 +164,19 @@ class PreviewReviewBatchRequest(BaseModel):
     items: list[PreviewReviewRequest]
     days: int = Field(default=260, ge=60, le=1200)
     force: bool = False
+
+
+class ReviewWatchlistItem(BaseModel):
+    ticker: str = Field(
+        ...,
+        validation_alias=AliasChoices("ticker", "symbol"),
+        description="Korean stock code, for example 080220.",
+    )
+    name: Optional[str] = Field(default=None, description="Human-readable stock name")
+
+
+class ReviewWatchlistRequest(BaseModel):
+    items: list[ReviewWatchlistItem]
 
 
 def now_utc() -> str:
@@ -385,6 +405,60 @@ def enrich_stock_search_results(results: list[dict[str, Any]], include_quote: bo
     return enriched
 
 
+def normalize_review_watchlist_items(items: list[Any]) -> list[dict[str, str]]:
+    normalized: list[dict[str, str]] = []
+    seen: set[str] = set()
+    for raw in items:
+        if isinstance(raw, BaseModel):
+            raw = raw.model_dump() if hasattr(raw, "model_dump") else raw.dict()
+        if not isinstance(raw, dict):
+            continue
+        ticker_raw = str(raw.get("ticker") or raw.get("symbol") or "").strip()
+        digits = "".join(ch for ch in ticker_raw if ch.isdigit())
+        ticker = digits if len(digits) == 6 else ticker_raw
+        if not ticker or ticker in seen:
+            continue
+        name = str(raw.get("name") or "").strip()
+        if not name:
+            name = market_data.lookup_pykrx_name(ticker) or ticker
+        normalized.append({"ticker": ticker, "name": name})
+        seen.add(ticker)
+        if len(normalized) >= REVIEW_WATCHLIST_LIMIT:
+            break
+    return normalized
+
+
+def load_review_watchlist() -> list[dict[str, str]]:
+    if REVIEW_WATCHLIST_PATH.exists():
+        try:
+            payload = json.loads(REVIEW_WATCHLIST_PATH.read_text(encoding="utf-8"))
+            raw_items = payload.get("items") if isinstance(payload, dict) else payload
+            items = normalize_review_watchlist_items(raw_items if isinstance(raw_items, list) else [])
+            if items:
+                return items
+        except Exception:
+            pass
+    return normalize_review_watchlist_items(DEFAULT_REVIEW_WATCHLIST)
+
+
+def save_review_watchlist(items: list[Any]) -> list[dict[str, str]]:
+    normalized = normalize_review_watchlist_items(items)
+    REVIEW_WATCHLIST_PATH.parent.mkdir(parents=True, exist_ok=True)
+    REVIEW_WATCHLIST_PATH.write_text(
+        json.dumps(
+            {
+                "updated_at": now_utc(),
+                "max_items": REVIEW_WATCHLIST_LIMIT,
+                "items": normalized,
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+    return normalized
+
+
 def roadmap_status() -> dict[str, Any]:
     return {
         "completed": [
@@ -402,12 +476,12 @@ def roadmap_status() -> dict[str, Any]:
             "리뷰 결과를 종목별로 비교하는 표",
             "검색 결과에 현재가/10만원 자동주문 가능 여부 표시",
             "UI에서 완료/진행/다음 작업 체크리스트 확인",
-        ],
-        "in_progress": [
             "관심종목 리스트 저장/불러오기",
         ],
-        "next": [
+        "in_progress": [
             "섹터/테마 분류",
+        ],
+        "next": [
             "코스피/코스닥/섹터 지수 상대강도 비교",
             "거래대금/수급/뉴스/공시 점수 결합",
             "조건별 백테스트 성과 지표 강화",
@@ -663,6 +737,30 @@ def stocks_search(q: str = "", limit: int = 20, force: bool = False, include_quo
 @app.get("/review-roadmap")
 def review_roadmap() -> dict[str, Any]:
     return api_success(roadmap_status())
+
+
+@app.get("/review-watchlist")
+def review_watchlist_get() -> dict[str, Any]:
+    items = load_review_watchlist()
+    return api_success({
+        "items": items,
+        "count": len(items),
+        "max_items": REVIEW_WATCHLIST_LIMIT,
+        "path": str(REVIEW_WATCHLIST_PATH),
+        "policy": "Keep the active review universe at 50 symbols or fewer.",
+    })
+
+
+@app.post("/review-watchlist")
+def review_watchlist_post(request: ReviewWatchlistRequest) -> dict[str, Any]:
+    items = save_review_watchlist(request.items)
+    return api_success({
+        "items": items,
+        "count": len(items),
+        "max_items": REVIEW_WATCHLIST_LIMIT,
+        "path": str(REVIEW_WATCHLIST_PATH),
+        "policy": "Saved watchlist is used by the Preview/Review UI and can be reused by n8n.",
+    })
 
 
 @app.post("/analyze")
@@ -935,6 +1033,8 @@ def review_ui() -> str:
 399720,가온칩스
 042700,한미반도체</textarea>
       <button id="addCurrent" type="button">현재 종목을 배치에 추가</button>
+      <button id="loadWatchlist" type="button">관심종목 불러오기</button>
+      <button id="saveWatchlist" type="button">관심종목 저장</button>
       <button id="runBatch" type="button">배치 리뷰 실행</button>
       <div id="batchResults"></div>
     </section>
@@ -1063,6 +1163,49 @@ def review_ui() -> str:
         })
         .filter((item) => item.ticker);
     }
+    function itemsToBatchText(items) {
+      return (items || [])
+        .map((item) => `${item.ticker}${item.name ? "," + item.name : ""}`)
+        .join("\n");
+    }
+    async function loadWatchlist() {
+      $("loadWatchlist").disabled = true;
+      try {
+        const response = await fetch("/review-watchlist");
+        const data = await response.json();
+        if (!data.ok) throw new Error(data.error || "watchlist load error");
+        $("batchItems").value = itemsToBatchText(data.items || []);
+        $("batchResults").innerHTML = `<p>관심종목 ${data.count}개를 불러왔습니다. 최대 ${data.max_items}개까지 관리합니다.</p>`;
+      } catch (error) {
+        $("batchResults").innerHTML = `<p>관심종목 불러오기 오류: ${error.message}</p>`;
+      } finally {
+        $("loadWatchlist").disabled = false;
+      }
+    }
+    async function saveWatchlist() {
+      const items = parseBatchItems();
+      if (!items.length) {
+        $("batchResults").innerHTML = "<p>저장할 관심종목이 없습니다.</p>";
+        return;
+      }
+      $("saveWatchlist").disabled = true;
+      try {
+        const response = await fetch("/review-watchlist", {
+          method: "POST",
+          headers: {"Content-Type": "application/json"},
+          body: JSON.stringify({items})
+        });
+        const data = await response.json();
+        if (!data.ok) throw new Error(data.error || "watchlist save error");
+        $("batchItems").value = itemsToBatchText(data.items || []);
+        $("batchResults").innerHTML = `<p>관심종목 ${data.count}개를 저장했습니다. 중복은 자동 정리됩니다.</p>`;
+        loadRoadmap();
+      } catch (error) {
+        $("batchResults").innerHTML = `<p>관심종목 저장 오류: ${error.message}</p>`;
+      } finally {
+        $("saveWatchlist").disabled = false;
+      }
+    }
     function renderBatchResults(results, errors) {
       if ((!results || !results.length) && (!errors || !errors.length)) {
         $("batchResults").innerHTML = "<p>배치 결과가 없습니다.</p>";
@@ -1094,6 +1237,8 @@ def review_ui() -> str:
         $("batchItems").value = `${$("batchItems").value.trim()}\n${line}`.trim();
       }
     });
+    $("loadWatchlist").addEventListener("click", loadWatchlist);
+    $("saveWatchlist").addEventListener("click", saveWatchlist);
     $("runBatch").addEventListener("click", async () => {
       const items = parseBatchItems();
       if (!items.length) {
@@ -1160,6 +1305,7 @@ def review_ui() -> str:
       }
     });
     loadRoadmap();
+    loadWatchlist();
   </script>
 </body>
 </html>
