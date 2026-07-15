@@ -1153,16 +1153,16 @@ def validate_report_text(report_text, days=260, force=False):
             )
     for error in price_verification["errors"]:
         blocking_reasons.append(f"{error.get('ticker')}: {error.get('error')}")
-    blocking_reasons.extend(evidence_warnings)
 
     return {
         "publishable": not blocking_reasons,
-        "report_guard_status": "passed" if not blocking_reasons else "blocked",
+        "report_guard_status": "passed_with_warnings" if evidence_warnings and not blocking_reasons else "passed" if not blocking_reasons else "blocked",
         "claims": claims,
         "report_analysis_dates": [item.isoformat() for item in report_analysis_dates],
         "expected_analysis_date": today.isoformat(),
         "price_verification": price_verification,
         "evidence_warnings": evidence_warnings,
+        "non_blocking_warnings": evidence_warnings,
         "realtime_source": realtime_status,
         "kiwoom_source": kiwoom_status,
         "kiwoom_rest_source": kiwoom_rest_status,

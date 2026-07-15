@@ -148,6 +148,41 @@ class ReportParserTests(unittest.TestCase):
         self.assertEqual(result["results"][0]["claim_status"], "matched")
         self.assertTrue(result["results"][0]["tradable"])
 
+    def test_unsourced_news_is_warning_not_blocker_when_price_and_date_match(self):
+        frame = pd.DataFrame(
+            [
+                {"date": pd.Timestamp("2026-07-15"), "open": 88000, "high": 90000, "low": 87000, "close": 89100, "volume": 1000},
+            ]
+        )
+        fetch = market_data.FetchResult(
+            ticker="080220",
+            name="제주반도체",
+            provider="test",
+            frame=frame,
+            cache_path=PROJECT_ROOT / "data" / "cache" / "test.csv",
+            rows=1,
+            warnings=[],
+        )
+        text = (
+            "분석 기준일: 2026-07-15\n"
+            "제주반도체(080220)\n"
+            "공개 현재가: 89,100원\n"
+            "뉴스/공시 촉매제: 반도체 수급 개선 기대\n"
+            '<json>{"symbol":"080220","score":35,"decision":"Reduce",'
+            '"target_price":null,"stop_loss":85773}</json>'
+        )
+
+        with patch.object(market_data, "today_kst", return_value=pd.Timestamp("2026-07-15").date()), \
+             patch.object(market_data, "fetch_ohlcv", return_value=fetch), \
+             patch.object(market_data, "cross_validate_ohlcv", return_value={"tradable": True, "status": "matched"}), \
+             patch.object(market_data, "fetch_best_current_quote", return_value={"ok": True, "price": 89100, "provider": "test_quote"}):
+            result = market_data.validate_report_text(text, force=True)
+
+        self.assertTrue(result["publishable"])
+        self.assertEqual(result["report_guard_status"], "passed_with_warnings")
+        self.assertEqual(result["blocking_reasons"], [])
+        self.assertTrue(result["non_blocking_warnings"])
+
 
 if __name__ == "__main__":
     unittest.main()

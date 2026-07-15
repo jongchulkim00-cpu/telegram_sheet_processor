@@ -131,6 +131,16 @@ function buildReasonLines(validation, localReasons) {
   return [...localReasons, ...apiReasons].filter(Boolean).slice(0, 12);
 }
 
+function classifyBlockReason(reasons) {
+  const joined = reasons.join("\n").toLowerCase();
+  const hasDate = /date|기준일|날짜/.test(joined);
+  const hasPrice = /price|현재가|시세|주가|목표가|손절가|mismatch|verified/.test(joined);
+  if (hasDate && hasPrice) return "날짜 또는 가격 검증 실패";
+  if (hasDate) return "날짜 검증 실패";
+  if (hasPrice) return "가격 검증 실패";
+  return "검증 정책 실패";
+}
+
 function extractBlockedTickers(validation, fallbackTicker) {
   const tickers = [];
   const addTicker = (ticker) => {
@@ -188,8 +198,9 @@ function correctedMessage(quotes, reasons) {
   const base = quoteList.length ? quoteList.map((quote) => quote.message).join("\n\n") : [
     `\uC624\uB298(${todayKorean()}) \uAE30\uC900 \uAC80\uC99D \uAC00\uB2A5\uD55C \uD604\uC7AC\uAC00\uB97C \uB2E4\uC2DC \uC870\uD68C\uD574\uC57C \uD569\uB2C8\uB2E4.`,
   ].join("\n");
+  const reasonLabel = classifyBlockReason(reasons);
   return [
-    "\uAE30\uC874 AI \uBCF4\uACE0\uC11C\uB294 \uB0A0\uC9DC \uB610\uB294 \uAC00\uACA9 \uAC80\uC99D \uC2E4\uD328\uB85C \uC804\uC1A1\uC744 \uCC28\uB2E8\uD588\uC2B5\uB2C8\uB2E4.",
+    `\uAE30\uC874 AI \uBCF4\uACE0\uC11C\uB294 ${reasonLabel}\uB85C \uC804\uC1A1\uC744 \uCC28\uB2E8\uD588\uC2B5\uB2C8\uB2E4.`,
     "",
     "\uAC80\uC99D \uC2E4\uD328 \uC885\uBAA9\uC758 \uD604\uC7AC \uAE30\uC900\uAC00:",
     "",
