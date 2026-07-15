@@ -23,6 +23,8 @@ class PreviewReviewApiTests(unittest.TestCase):
         self.assertIn("review-watchlist", html)
         self.assertIn("loadWatchlist", html)
         self.assertIn("saveWatchlist", html)
+        self.assertIn("review-sectors", html)
+        self.assertIn("loadSectorThemes", html)
         self.assertIn("include_quote=true", html)
         self.assertIn("ticker", html)
         self.assertIn("BUY", html)
@@ -58,7 +60,7 @@ class PreviewReviewApiTests(unittest.TestCase):
 
         self.assertGreater(len(roadmap["completed"]), 1)
         self.assertGreater(len(roadmap["next"]), 1)
-        self.assertIn("섹터", roadmap["in_progress"][0])
+        self.assertIn("상대강도", roadmap["in_progress"][0])
 
     def test_review_watchlist_save_load_normalizes_duplicates(self):
         original_path = api_server.REVIEW_WATCHLIST_PATH
@@ -77,6 +79,32 @@ class PreviewReviewApiTests(unittest.TestCase):
             self.assertEqual(len(loaded), 2)
             self.assertEqual(loaded[0]["ticker"], "042700")
             self.assertEqual(loaded[1]["ticker"], "080220")
+        finally:
+            api_server.REVIEW_WATCHLIST_PATH = original_path
+            if temp_path.exists():
+                temp_path.unlink()
+
+    def test_classify_stock_theme_marks_semiconductor_items(self):
+        result = api_server.classify_stock_theme("080220", "제주반도체", "KOSDAQ")
+
+        self.assertEqual(result["primary_theme"], "반도체/AI")
+        self.assertEqual(result["sector"], "반도체")
+        self.assertEqual(result["classification_confidence"], "high")
+
+    def test_review_sector_summary_groups_watchlist(self):
+        original_path = api_server.REVIEW_WATCHLIST_PATH
+        temp_path = PROJECT_ROOT / "data" / "test_review_sector_watchlist.json"
+        api_server.REVIEW_WATCHLIST_PATH = temp_path
+        try:
+            api_server.save_review_watchlist([
+                {"ticker": "080220", "name": "제주반도체"},
+                {"ticker": "247540", "name": "에코프로비엠"},
+            ])
+            summary = api_server.review_sector_summary()
+
+            self.assertEqual(summary["count"], 2)
+            self.assertTrue(any(group["theme"] == "반도체/AI" for group in summary["groups"]))
+            self.assertTrue(any(group["theme"] == "2차전지/소재" for group in summary["groups"]))
         finally:
             api_server.REVIEW_WATCHLIST_PATH = original_path
             if temp_path.exists():

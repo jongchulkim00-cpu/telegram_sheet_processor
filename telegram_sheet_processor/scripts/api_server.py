@@ -60,6 +60,50 @@ DEFAULT_REVIEW_WATCHLIST = [
     {"ticker": "399720", "name": "가온칩스"},
     {"ticker": "042700", "name": "한미반도체"},
 ]
+THEME_RULES = [
+    {
+        "key": "semiconductor_ai",
+        "label": "반도체/AI",
+        "sector": "반도체",
+        "tickers": {"000660", "042700", "039030", "080220", "399720", "403870", "394280", "094360", "432720"},
+        "keywords": ["반도체", "하이닉스", "한미", "이오테크닉스", "제주", "가온칩스", "HPSP", "오픈엣지", "칩스앤미디어", "퀄리타스"],
+    },
+    {
+        "key": "battery_materials",
+        "label": "2차전지/소재",
+        "sector": "2차전지",
+        "tickers": {"247540", "373220", "011790"},
+        "keywords": ["에코프로", "LG에너지", "SKC", "전지", "배터리", "소재"],
+    },
+    {
+        "key": "bio_healthcare",
+        "label": "바이오/헬스케어",
+        "sector": "바이오",
+        "tickers": {"196170", "214150"},
+        "keywords": ["알테오젠", "클래시스", "바이오", "헬스케어"],
+    },
+    {
+        "key": "robotics",
+        "label": "로봇",
+        "sector": "로봇",
+        "tickers": {"277810"},
+        "keywords": ["로보틱스", "로봇"],
+    },
+    {
+        "key": "auto_mobility",
+        "label": "자동차/모빌리티",
+        "sector": "자동차",
+        "tickers": {"005380"},
+        "keywords": ["현대차", "기아", "모빌리티", "자동차"],
+    },
+    {
+        "key": "large_cap_core",
+        "label": "대형주/지수핵심",
+        "sector": "대형주",
+        "tickers": {"005930", "005490"},
+        "keywords": ["삼성전자", "POSCO", "포스코"],
+    },
+]
 
 app = FastAPI(
     title="Korean Stock Precision API",
@@ -387,6 +431,7 @@ def enrich_stock_search_results(results: list[dict[str, Any]], include_quote: bo
     enriched = []
     for row in results:
         item = dict(row)
+        item.update(classify_stock_theme(item.get("ticker"), item.get("name"), item.get("market")))
         if include_quote:
             try:
                 quote = quote_payload(item["ticker"], name=item.get("name"), days=120, force=False)
@@ -403,6 +448,83 @@ def enrich_stock_search_results(results: list[dict[str, Any]], include_quote: bo
                 item["initial_auto_order_allowed"] = None
         enriched.append(item)
     return enriched
+
+
+def classify_stock_theme(ticker: Any, name: Any = None, market: Any = None) -> dict[str, Any]:
+    ticker_text = str(ticker or "").strip()
+    name_text = str(name or "").strip()
+    matched = []
+    lowered_name = name_text.lower()
+    for rule in THEME_RULES:
+        ticker_hit = ticker_text in rule["tickers"]
+        keyword_hit = any(keyword.lower() in lowered_name for keyword in rule["keywords"])
+        if ticker_hit or keyword_hit:
+            matched.append({
+                "key": rule["key"],
+                "label": rule["label"],
+                "sector": rule["sector"],
+                "match": "ticker" if ticker_hit else "keyword",
+            })
+
+    if matched:
+        primary = matched[0]
+        confidence = "high" if primary["match"] == "ticker" else "medium"
+        return {
+            "market": str(market or "UNKNOWN"),
+            "sector": primary["sector"],
+            "primary_theme": primary["label"],
+            "themes": [item["label"] for item in matched],
+            "theme_keys": [item["key"] for item in matched],
+            "classification_confidence": confidence,
+            "classification_source": "static_rule_v1",
+        }
+
+    return {
+        "market": str(market or "UNKNOWN"),
+        "sector": "미분류",
+        "primary_theme": "미분류",
+        "themes": [],
+        "theme_keys": [],
+        "classification_confidence": "low",
+        "classification_source": "unclassified",
+    }
+
+
+def market_by_ticker(force: bool = False) -> dict[str, str]:
+    rows, _source = load_stock_universe(force=force)
+    return {str(row.get("ticker")): str(row.get("market") or "UNKNOWN") for row in rows}
+
+
+def review_sector_summary(force: bool = False) -> dict[str, Any]:
+    markets = market_by_ticker(force=force)
+    items = []
+    groups: dict[str, dict[str, Any]] = {}
+    for item in load_review_watchlist():
+        ticker = item["ticker"]
+        enriched = {
+            **item,
+            **classify_stock_theme(ticker, item.get("name"), markets.get(ticker, "UNKNOWN")),
+        }
+        items.append(enriched)
+        key = enriched["primary_theme"]
+        group = groups.setdefault(key, {
+            "theme": key,
+            "sector": enriched["sector"],
+            "count": 0,
+            "items": [],
+        })
+        group["count"] += 1
+        group["items"].append({"ticker": ticker, "name": item.get("name")})
+
+    sorted_groups = sorted(groups.values(), key=lambda row: (-row["count"], row["theme"]))
+    return {
+        "items": items,
+        "groups": sorted_groups,
+        "count": len(items),
+        "group_count": len(sorted_groups),
+        "classification_source": "static_rule_v1",
+        "policy": "Theme classification is a first-pass review aid. It must be improved with KRX industry, news, supply-demand, and index-relative strength before automated trading.",
+    }
 
 
 def normalize_review_watchlist_items(items: list[Any]) -> list[dict[str, str]]:
@@ -477,12 +599,12 @@ def roadmap_status() -> dict[str, Any]:
             "검색 결과에 현재가/10만원 자동주문 가능 여부 표시",
             "UI에서 완료/진행/다음 작업 체크리스트 확인",
             "관심종목 리스트 저장/불러오기",
+            "관심종목 섹터/테마 1차 분류",
         ],
         "in_progress": [
-            "섹터/테마 분류",
+            "코스피/코스닥/섹터 지수 상대강도 비교",
         ],
         "next": [
-            "코스피/코스닥/섹터 지수 상대강도 비교",
             "거래대금/수급/뉴스/공시 점수 결합",
             "조건별 백테스트 성과 지표 강화",
             "Kiwoom REST 30분봉 데이터 연결",
@@ -751,6 +873,14 @@ def review_watchlist_get() -> dict[str, Any]:
     })
 
 
+@app.get("/review-sectors")
+def review_sectors(force: bool = False) -> dict[str, Any]:
+    try:
+        return api_success(review_sector_summary(force=force))
+    except Exception as exc:
+        return api_error(exc)
+
+
 @app.post("/review-watchlist")
 def review_watchlist_post(request: ReviewWatchlistRequest) -> dict[str, Any]:
     items = save_review_watchlist(request.items)
@@ -866,9 +996,15 @@ def on_device_ai(request: ThemeRequest) -> dict[str, Any]:
 
 def compact_preview_review(result: dict[str, Any]) -> dict[str, Any]:
     ticker = str(result.get("ticker", ""))
+    classification = classify_stock_theme(
+        ticker,
+        result.get("name"),
+        result.get("market") or "UNKNOWN",
+    )
     chart_url = f"/preview-review/chart/{ticker}" if ticker else None
     return {
         **result,
+        "classification": classification,
         "chart_url": chart_url,
         "policy": {
             "initial_order_budget_krw": preview_review_engine.INITIAL_ORDER_BUDGET_KRW,
@@ -973,6 +1109,8 @@ def review_ui() -> str:
     .pill { display:inline-block; border-radius:999px; padding:2px 7px; font-size:11px; border:1px solid var(--line); color:var(--muted); margin-top:4px; }
     .pill.good { border-color:#bbf7d0; background:#f0fdf4; color:var(--good); }
     .pill.warn { border-color:#fde68a; background:#fffbeb; color:var(--warn); }
+    .tags { display:flex; flex-wrap:wrap; gap:6px; margin-top:8px; }
+    .tag { display:inline-block; border-radius:999px; padding:3px 8px; font-size:12px; border:1px solid var(--line); background:#f8fafc; color:var(--muted); }
     .hint { font-size:12px; color:var(--muted); margin-top:6px; }
     .roadmap { margin-bottom:16px; }
     .roadmap-grid { display:grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap:10px; }
@@ -1048,6 +1186,10 @@ def review_ui() -> str:
         </div>
         <div id="roadmapDetail" class="hint">로드맵 불러오는 중</div>
       </div>
+      <div class="roadmap">
+        <h2>섹터/테마 분류</h2>
+        <div id="sectorDetail" class="hint">테마 분류 불러오는 중</div>
+      </div>
       <h2>차트 리뷰</h2>
       <iframe id="chart" title="preview review chart"></iframe>
     </section>
@@ -1100,6 +1242,7 @@ def review_ui() -> str:
           <div><strong>${item.name}</strong><br><small>${item.market}</small></div>
           <div style="text-align:right">
             <small>${item.ticker}</small><br>
+            <span class="pill">${item.primary_theme || "미분류"}</span><br>
             ${item.quote_price ? `<span class="pill ${item.initial_auto_order_allowed ? "good" : "warn"}">${Number(item.quote_price).toLocaleString()}원 · ${item.initial_auto_order_allowed ? "10만원 가능" : "review only"}</span>` : `<span class="pill">가격 미확인</span>`}
           </div>
         </div>
@@ -1122,6 +1265,23 @@ def review_ui() -> str:
         `;
       } catch (error) {
         $("roadmapDetail").textContent = "로드맵 로드 실패: " + error.message;
+      }
+    }
+    async function loadSectorThemes() {
+      try {
+        const response = await fetch("/review-sectors");
+        const data = await response.json();
+        if (!data.ok) throw new Error(data.error || "sector error");
+        if (!data.groups.length) {
+          $("sectorDetail").textContent = "관심종목이 없습니다.";
+          return;
+        }
+        $("sectorDetail").innerHTML = `
+          <div class="tags">${data.groups.map((group) => `<span class="tag">${group.theme} ${group.count}</span>`).join("")}</div>
+          <ul>${data.items.map((item) => `<li>${item.name} (${item.ticker}) · ${item.primary_theme} · ${item.market}</li>`).join("")}</ul>
+        `;
+      } catch (error) {
+        $("sectorDetail").textContent = "테마 분류 로드 실패: " + error.message;
       }
     }
     $("stockSearch").addEventListener("input", () => {
@@ -1176,6 +1336,7 @@ def review_ui() -> str:
         if (!data.ok) throw new Error(data.error || "watchlist load error");
         $("batchItems").value = itemsToBatchText(data.items || []);
         $("batchResults").innerHTML = `<p>관심종목 ${data.count}개를 불러왔습니다. 최대 ${data.max_items}개까지 관리합니다.</p>`;
+        loadSectorThemes();
       } catch (error) {
         $("batchResults").innerHTML = `<p>관심종목 불러오기 오류: ${error.message}</p>`;
       } finally {
@@ -1200,6 +1361,7 @@ def review_ui() -> str:
         $("batchItems").value = itemsToBatchText(data.items || []);
         $("batchResults").innerHTML = `<p>관심종목 ${data.count}개를 저장했습니다. 중복은 자동 정리됩니다.</p>`;
         loadRoadmap();
+        loadSectorThemes();
       } catch (error) {
         $("batchResults").innerHTML = `<p>관심종목 저장 오류: ${error.message}</p>`;
       } finally {
@@ -1217,6 +1379,7 @@ def review_ui() -> str:
         const prepare = stats.PREPARE || {};
         return `<tr>
           <td>${review.name}<br><small>${review.ticker}</small></td>
+          <td>${review.classification ? review.classification.primary_theme : "-"}</td>
           <td>${fmt(buy.positive_end_probability_pct)}%</td>
           <td>${fmt(prepare.positive_end_probability_pct)}%</td>
           <td>${fmt(buy.count)}</td>
@@ -1224,8 +1387,8 @@ def review_ui() -> str:
           <td><a href="${review.chart_url}" target="_blank">차트</a></td>
         </tr>`;
       }).join("");
-      const errorRows = (errors || []).map((error) => `<tr><td>${error.name || error.ticker}<br><small>${error.ticker}</small></td><td colspan="5">${error.error}</td></tr>`).join("");
-      $("batchResults").innerHTML = `<table><thead><tr><th>종목</th><th>BUY 확률</th><th>PREPARE 확률</th><th>BUY 횟수</th><th>REDUCE</th><th>차트</th></tr></thead><tbody>${rows}${errorRows}</tbody></table>`;
+      const errorRows = (errors || []).map((error) => `<tr><td>${error.name || error.ticker}<br><small>${error.ticker}</small></td><td colspan="6">${error.error}</td></tr>`).join("");
+      $("batchResults").innerHTML = `<table><thead><tr><th>종목</th><th>테마</th><th>BUY 확률</th><th>PREPARE 확률</th><th>BUY 횟수</th><th>REDUCE</th><th>차트</th></tr></thead><tbody>${rows}${errorRows}</tbody></table>`;
     }
     $("addCurrent").addEventListener("click", () => {
       const ticker = $("ticker").value.trim();
@@ -1306,6 +1469,7 @@ def review_ui() -> str:
     });
     loadRoadmap();
     loadWatchlist();
+    loadSectorThemes();
   </script>
 </body>
 </html>
