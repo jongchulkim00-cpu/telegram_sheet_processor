@@ -19,6 +19,8 @@ class PreviewReviewApiTests(unittest.TestCase):
         self.assertIn("autoFillStockFrom", html)
         self.assertIn("preview-review-batch", html)
         self.assertIn("batchItems", html)
+        self.assertIn("review-roadmap", html)
+        self.assertIn("include_quote=true", html)
         self.assertIn("ticker", html)
         self.assertIn("BUY", html)
         self.assertIn("PREPARE", html)
@@ -47,6 +49,13 @@ class PreviewReviewApiTests(unittest.TestCase):
 
         self.assertGreaterEqual(found["count"], 1)
         self.assertEqual(found["results"][0]["ticker"], "042700")
+
+    def test_roadmap_status_has_visible_buckets(self):
+        roadmap = api_server.roadmap_status()
+
+        self.assertGreater(len(roadmap["completed"]), 1)
+        self.assertGreater(len(roadmap["next"]), 1)
+        self.assertIn("관심종목", roadmap["in_progress"][0])
 
 
 if __name__ == "__main__":

@@ -363,6 +363,62 @@ def search_stock_universe(query: str, limit: int = 20, force: bool = False) -> d
     }
 
 
+def enrich_stock_search_results(results: list[dict[str, Any]], include_quote: bool = False) -> list[dict[str, Any]]:
+    enriched = []
+    for row in results:
+        item = dict(row)
+        if include_quote:
+            try:
+                quote = quote_payload(item["ticker"], name=item.get("name"), days=120, force=False)
+                item["quote_price"] = quote.get("quote_price")
+                item["quote_source"] = quote.get("quote_source")
+                item["quote_label"] = quote.get("quote_label")
+                item["data_as_of"] = quote.get("data_as_of")
+                item["initial_auto_order_allowed"] = bool(
+                    quote.get("quote_price") is not None
+                    and float(quote.get("quote_price")) <= preview_review_engine.INITIAL_ORDER_BUDGET_KRW
+                )
+            except Exception as exc:
+                item["quote_error"] = str(exc)
+                item["initial_auto_order_allowed"] = None
+        enriched.append(item)
+    return enriched
+
+
+def roadmap_status() -> dict[str, Any]:
+    return {
+        "completed": [
+            "기존 stock-api 8010 포트 안에 Preview/Review UI 추가",
+            "단일 종목 일봉 리뷰 API",
+            "50개 이하 배치 리뷰 API",
+            "차트 HTML 생성",
+            "신호 JSON 로그 생성",
+            "BUY/PREPARE/REDUCE/AVOID/HOLD/WAIT 신호 분류",
+            "10거래일 후 확률/평균수익/최대상승/최대하락 요약",
+            "종목명/종목코드 검색",
+            "종목코드 또는 종목명 입력 시 나머지 자동기입",
+            "10만원 초기 자동주문 기준 표시",
+            "UI에서 관심종목 50개 이하 배치 리뷰 실행",
+            "리뷰 결과를 종목별로 비교하는 표",
+            "검색 결과에 현재가/10만원 자동주문 가능 여부 표시",
+            "UI에서 완료/진행/다음 작업 체크리스트 확인",
+        ],
+        "in_progress": [
+            "관심종목 리스트 저장/불러오기",
+        ],
+        "next": [
+            "섹터/테마 분류",
+            "코스피/코스닥/섹터 지수 상대강도 비교",
+            "거래대금/수급/뉴스/공시 점수 결합",
+            "조건별 백테스트 성과 지표 강화",
+            "Kiwoom REST 30분봉 데이터 연결",
+            "30분봉 실제 진입 타이밍 검증",
+            "승인형 주문 1주 운영 로그",
+            "소액 자동주문 2주 운영 로그",
+        ],
+    }
+
+
 def analyze_one(request: AnalyzeRequest) -> dict[str, Any]:
     item = normalize_item(request)
     fetch = market_data.fetch_ohlcv(
@@ -591,11 +647,22 @@ def cache_audit(tickers: Optional[str] = None) -> dict[str, Any]:
 
 
 @app.get("/stocks/search")
-def stocks_search(q: str = "", limit: int = 20, force: bool = False) -> dict[str, Any]:
+def stocks_search(q: str = "", limit: int = 20, force: bool = False, include_quote: bool = False) -> dict[str, Any]:
     try:
-        return api_success(search_stock_universe(q, limit=limit, force=force))
+        payload = search_stock_universe(q, limit=limit, force=force)
+        payload["results"] = enrich_stock_search_results(
+            payload.get("results", []),
+            include_quote=include_quote,
+        )
+        payload["include_quote"] = include_quote
+        return api_success(payload)
     except Exception as exc:
         return api_error(exc, {"query": q, "limit": limit})
+
+
+@app.get("/review-roadmap")
+def review_roadmap() -> dict[str, Any]:
+    return api_success(roadmap_status())
 
 
 @app.post("/analyze")
@@ -805,7 +872,13 @@ def review_ui() -> str:
     .suggestion:hover { background:#eef5ff; }
     .suggestion strong { font-size:15px; }
     .suggestion small { color:var(--muted); }
+    .pill { display:inline-block; border-radius:999px; padding:2px 7px; font-size:11px; border:1px solid var(--line); color:var(--muted); margin-top:4px; }
+    .pill.good { border-color:#bbf7d0; background:#f0fdf4; color:var(--good); }
+    .pill.warn { border-color:#fde68a; background:#fffbeb; color:var(--warn); }
     .hint { font-size:12px; color:var(--muted); margin-top:6px; }
+    .roadmap { margin-bottom:16px; }
+    .roadmap-grid { display:grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap:10px; }
+    .roadmap ul { margin:8px 0 0; padding-left:18px; color:var(--muted); font-size:13px; }
     .cards { display:grid; grid-template-columns: repeat(4, minmax(120px,1fr)); gap:10px; margin:12px 0; }
     .card { border:1px solid var(--line); border-radius:8px; padding:10px; background:#fbfcff; }
     .card b { display:block; font-size:18px; }
@@ -866,6 +939,15 @@ def review_ui() -> str:
       <div id="batchResults"></div>
     </section>
     <section>
+      <div class="roadmap">
+        <h2>진행 체크리스트</h2>
+        <div class="roadmap-grid">
+          <div class="card"><span>완료</span><b id="doneCount">-</b></div>
+          <div class="card"><span>진행 중</span><b id="doingCount">-</b></div>
+          <div class="card"><span>다음</span><b id="nextCount">-</b></div>
+        </div>
+        <div id="roadmapDetail" class="hint">로드맵 불러오는 중</div>
+      </div>
       <h2>차트 리뷰</h2>
       <iframe id="chart" title="preview review chart"></iframe>
     </section>
@@ -905,7 +987,7 @@ def review_ui() -> str:
         $("suggestions").style.display = "none";
         return;
       }
-      const response = await fetch(`/stocks/search?q=${encodeURIComponent(query)}&limit=12`);
+      const response = await fetch(`/stocks/search?q=${encodeURIComponent(query)}&limit=12&include_quote=true`);
       const data = await response.json();
       const results = data.results || [];
       if (!data.ok || !results.length) {
@@ -916,10 +998,31 @@ def review_ui() -> str:
       $("suggestions").innerHTML = results.map((item) => `
         <div class="suggestion" data-ticker="${item.ticker}" data-name="${item.name}">
           <div><strong>${item.name}</strong><br><small>${item.market}</small></div>
-          <small>${item.ticker}</small>
+          <div style="text-align:right">
+            <small>${item.ticker}</small><br>
+            ${item.quote_price ? `<span class="pill ${item.initial_auto_order_allowed ? "good" : "warn"}">${Number(item.quote_price).toLocaleString()}원 · ${item.initial_auto_order_allowed ? "10만원 가능" : "review only"}</span>` : `<span class="pill">가격 미확인</span>`}
+          </div>
         </div>
       `).join("");
       $("suggestions").style.display = "block";
+    }
+    async function loadRoadmap() {
+      try {
+        const response = await fetch("/review-roadmap");
+        const data = await response.json();
+        if (!data.ok) throw new Error(data.error || "roadmap error");
+        $("doneCount").textContent = data.completed.length;
+        $("doingCount").textContent = data.in_progress.length;
+        $("nextCount").textContent = data.next.length;
+        $("roadmapDetail").innerHTML = `
+          <b>진행 중</b>
+          <ul>${data.in_progress.map((item) => `<li>${item}</li>`).join("")}</ul>
+          <b>다음</b>
+          <ul>${data.next.slice(0, 5).map((item) => `<li>${item}</li>`).join("")}</ul>
+        `;
+      } catch (error) {
+        $("roadmapDetail").textContent = "로드맵 로드 실패: " + error.message;
+      }
     }
     $("stockSearch").addEventListener("input", () => {
       clearTimeout(searchTimer);
@@ -1056,6 +1159,7 @@ def review_ui() -> str:
         $("run").disabled = false;
       }
     });
+    loadRoadmap();
   </script>
 </body>
 </html>
