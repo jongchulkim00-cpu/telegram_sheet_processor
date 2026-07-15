@@ -122,6 +122,10 @@ function isTickerMarketBriefing(text, tickers) {
   );
 }
 
+function isAvoidanceResponse(text) {
+  return /(?:\uC885\uBAA9\uBCC4\s*\uC815\uBC00\s*\uBD84\uC11D\uC5D0\s*\uCD5C\uC801\uD654|\uC2A4\uD06C\uB9AC\uB2DD\uD558\uC5EC\s*\uB9AC\uC2A4\uD2B8\uC5C5\uD558\uB294\s*\uAE30\uB2A5\uC740\s*\uC81C\uD55C|\uAD00\uC2EC\uC744\s*\uAC00\uC9C0\uC2DC\uB294\s*\uC139\uD130|\uD2B9\uC815\s*\uC885\uBAA9.*\uB9D0\uC500|\uB9D0\uC500\uD574\uC8FC\uC2DC\uBA74.*\uBD84\uC11D|\uC2EC\uCE35\s*\uBD84\uC11D\uC744\s*\uC2DC\uC791)/i.test(text);
+}
+
 function buildReasonLines(validation, localReasons) {
   const apiReasons = Array.isArray(validation?.blocking_reasons) ? validation.blocking_reasons : [];
   return [...localReasons, ...apiReasons].filter(Boolean).slice(0, 12);
@@ -205,6 +209,31 @@ return await (async () => {
     const expectedDate = todayKstIso();
     const reportDate = extractReportDate(cleanMessage);
     const localReasons = [];
+
+    if (isAvoidanceResponse(cleanMessage)) {
+      const messageWithDate = ensureDateHeader([
+        "\uC5D0\uC774\uC804\uD2B8\uAC00 \uAE30\uBCF8 \uD6C4\uBCF4\uAD70 \uC2A4\uD06C\uB9AC\uB2DD\uC744 \uC218\uD589\uD558\uC9C0 \uC54A\uACE0 \uC0AC\uC6A9\uC790\uC5D0\uAC8C \uB2E4\uC2DC \uC9C8\uBB38\uD588\uC2B5\uB2C8\uB2E4.",
+        "",
+        "\uC870\uCE58: \uAE30\uBCF8 \uD6C4\uBCF4\uAD70(\uBC18\uB3C4\uCCB4, 2\uCC28\uC804\uC9C0, \uC790\uB3D9\uCC28, \uBC14\uC774\uC624) 5~10\uAC1C\uB97C \uC790\uB3D9 \uC120\uC815\uD558\uACE0 stock API /analyze-batch\uB85C \uC7AC\uC791\uC131\uD574\uC57C \uD569\uB2C8\uB2E4.",
+      ].join("\n"));
+      return [{
+        json: {
+          db_data: { symbol: "BLOCKED", score: 0, decision: "AvoidanceResponse", target_price: 0, stop_loss: 0 },
+          telegram_message: messageWithDate,
+          can_publish: false,
+          validation: {
+            ok: false,
+            publishable: false,
+            report_guard_status: "avoidance_response",
+            expected_analysis_date: expectedDate,
+            blocking_reasons: [
+              "AI agent asked the user for a sector/ticker instead of running the default screening workflow.",
+            ],
+          },
+          original_report: cleanMessage,
+        },
+      }];
+    }
 
     if (!allTickers.length && !hasStockPriceClaimWithoutTicker(cleanMessage)) {
       const messageWithDate = ensureDateHeader(cleanMessage);
