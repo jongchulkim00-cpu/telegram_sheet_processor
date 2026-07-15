@@ -28,6 +28,7 @@ MAX_STRATEGY_PRICE_GAP_PCT = 3.0
 PRICE_RE = r"([0-9]{1,3}(?:,[0-9]{3})+|[0-9]+)\s*" + chr(0xC6D0)
 REALTIME_ENV_KEYS = ["KIS_APP_KEY", "KIS_APP_SECRET", "KIS_ACCOUNT_NO"]
 ALLOW_STALE_CACHE = os.getenv("ALLOW_STALE_CACHE", "false").lower() in ["1", "true", "yes", "y"]
+PUBLIC_QUOTE_FALLBACK_ENABLED = os.getenv("PUBLIC_QUOTE_FALLBACK_ENABLED", "false").lower() in ["1", "true", "yes", "y"]
 _KIWOOM_REST_TOKEN_CACHE = {"token": None, "expires_at": 0.0, "expires_dt": None}
 
 
@@ -639,7 +640,9 @@ def fetch_kiwoom_rest_quote(ticker):
 def fetch_best_current_quote(ticker):
     """Return the best available current quote.
 
-    Priority is broker-grade Kiwoom REST first, then public Naver quote.
+    Priority is broker-grade Kiwoom REST. Public Naver fallback is disabled by
+    default for automated-trading safety and must be explicitly enabled with
+    PUBLIC_QUOTE_FALLBACK_ENABLED=true.
     Daily OHLCV close remains the caller's final fallback because it needs the
     already-fetched candle frame.
     """
@@ -652,6 +655,18 @@ def fetch_best_current_quote(ticker):
             "url": kiwoom_rest_quote.get("url"),
             "raw": kiwoom_rest_quote,
             "priority": "broker_kiwoom_rest",
+        }
+
+    if not PUBLIC_QUOTE_FALLBACK_ENABLED:
+        return {
+            "ok": False,
+            "provider": None,
+            "price": None,
+            "url": None,
+            "priority": "broker_required",
+            "kiwoom_rest_error": kiwoom_rest_quote.get("error"),
+            "naver_error": "Public quote fallback is disabled. Set PUBLIC_QUOTE_FALLBACK_ENABLED=true to allow Naver fallback.",
+            "fallback_blocked": True,
         }
 
     public_quote = fetch_naver_public_quote(ticker)
@@ -682,10 +697,12 @@ def quote_source_status():
         "kiwoom_rest_realtime": kiwoom_rest,
         "public_quote": {
             "provider": "Naver Finance public quote",
-            "configured": True,
+            "configured": PUBLIC_QUOTE_FALLBACK_ENABLED,
             "realtime": False,
-            "role": "No-key public current quote fallback. Do not label as broker-grade realtime.",
+            "role": "Disabled by default. Enable PUBLIC_QUOTE_FALLBACK_ENABLED=true only for reference/fallback use, never broker-grade realtime.",
         },
+        "public_quote_fallback_enabled": PUBLIC_QUOTE_FALLBACK_ENABLED,
+        "current_quote_policy": "broker_only" if not PUBLIC_QUOTE_FALLBACK_ENABLED else "broker_then_public_reference",
         "daily_primary": "pykrx",
         "daily_fallback": "FinanceDataReader",
     }

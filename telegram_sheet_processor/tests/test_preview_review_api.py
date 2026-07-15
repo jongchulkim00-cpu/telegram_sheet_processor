@@ -215,6 +215,50 @@ class PreviewReviewApiTests(unittest.TestCase):
         self.assertFalse(quote["broker_realtime_enabled"])
         self.assertIn("공개 현재가", quote["message"])
 
+    def test_quote_payload_uses_daily_close_when_broker_required_and_kiwoom_fails(self):
+        frame = pd.DataFrame({
+            "date": ["2026-07-15"],
+            "open": [89100],
+            "high": [89100],
+            "low": [89100],
+            "close": [89100],
+            "volume": [1000],
+        })
+        fetch = api_server.market_data.FetchResult(
+            ticker="080220",
+            name="제주반도체",
+            provider="cache",
+            rows=1,
+            cache_path=Path("dummy.csv"),
+            warnings=[],
+            frame=frame,
+        )
+
+        with patch.object(api_server.market_data, "fetch_ohlcv", return_value=fetch), \
+            patch.object(api_server.market_data, "cross_validate_ohlcv", return_value={"tradable": True}), \
+            patch.object(api_server.market_data, "latest_data_meta", return_value={
+                "data_as_of": "2026-07-15",
+                "data_age_days": 1,
+                "freshness_status": "fresh",
+                "tradable": True,
+            }), \
+            patch.object(api_server.market_data, "lookup_pykrx_name", return_value="제주반도체"), \
+            patch.object(api_server.market_data, "fetch_best_current_quote", return_value={
+                "ok": False,
+                "provider": None,
+                "price": None,
+                "url": None,
+                "priority": "broker_required",
+                "kiwoom_rest_error": "timeout",
+                "fallback_blocked": True,
+            }):
+            quote = api_server.quote_payload("080220", name="제주반도체", days=120, force=False)
+
+        self.assertEqual(quote["quote_price"], 89100)
+        self.assertEqual(quote["quote_source"], "cache")
+        self.assertEqual(quote["quote_label"], "public_current_quote")
+        self.assertFalse(quote["broker_realtime_enabled"])
+
 
 if __name__ == "__main__":
     unittest.main()

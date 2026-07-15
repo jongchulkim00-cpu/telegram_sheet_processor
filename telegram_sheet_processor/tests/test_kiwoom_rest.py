@@ -23,6 +23,7 @@ class KiwoomRestTests(unittest.TestCase):
                 "KIWOOM_REST_BASE_URL",
                 "KIWOOM_REST_APP_KEY",
                 "KIWOOM_REST_APP_SECRET",
+                "PUBLIC_QUOTE_FALLBACK_ENABLED",
             ]
         }
         market_data._KIWOOM_REST_TOKEN_CACHE.update({"token": None, "expires_at": 0.0, "expires_dt": None})
@@ -112,6 +113,57 @@ class KiwoomRestTests(unittest.TestCase):
         self.assertEqual(result["price"], 91700)
         self.assertEqual(result["priority"], "broker_kiwoom_rest")
         mock_naver.assert_not_called()
+
+    @patch("market_data.fetch_naver_public_quote")
+    @patch("market_data.fetch_kiwoom_rest_quote")
+    def test_best_current_quote_blocks_naver_by_default_when_kiwoom_fails(self, mock_kiwoom, mock_naver):
+        os.environ.pop("PUBLIC_QUOTE_FALLBACK_ENABLED", None)
+        mock_kiwoom.return_value = {
+            "ok": False,
+            "source": "kiwoom_rest",
+            "ticker": "005930",
+            "price": None,
+            "url": None,
+            "error": "timeout",
+        }
+
+        result = market_data.fetch_best_current_quote("005930")
+
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["priority"], "broker_required")
+        self.assertTrue(result["fallback_blocked"])
+        mock_naver.assert_not_called()
+
+    @patch("market_data.fetch_naver_public_quote")
+    @patch("market_data.fetch_kiwoom_rest_quote")
+    def test_best_current_quote_can_use_naver_when_explicitly_enabled(self, mock_kiwoom, mock_naver):
+        original = market_data.PUBLIC_QUOTE_FALLBACK_ENABLED
+        market_data.PUBLIC_QUOTE_FALLBACK_ENABLED = True
+        try:
+            mock_kiwoom.return_value = {
+                "ok": False,
+                "source": "kiwoom_rest",
+                "ticker": "005930",
+                "price": None,
+                "url": None,
+                "error": "timeout",
+            }
+            mock_naver.return_value = {
+                "ok": True,
+                "provider": "naver_finance_public",
+                "ticker": "005930",
+                "price": 91700,
+                "url": "https://finance.naver.com/item/main.naver?code=005930",
+                "error": None,
+            }
+
+            result = market_data.fetch_best_current_quote("005930")
+        finally:
+            market_data.PUBLIC_QUOTE_FALLBACK_ENABLED = original
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["provider"], "naver_finance_public")
+        self.assertEqual(result["priority"], "public_naver")
 
     @patch("market_data.fetch_ohlcv")
     @patch("market_data.cross_validate_ohlcv")
