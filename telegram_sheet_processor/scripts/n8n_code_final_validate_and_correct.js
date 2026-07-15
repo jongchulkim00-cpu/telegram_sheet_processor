@@ -6,6 +6,7 @@
 
 const input = items[0]?.json || {};
 const fullOutput = String(input.output || input.text || input.message || input.result || "");
+const CODE_VERSION = "2026-07-15-evidence-warning-gate";
 
 function todayKstIso() {
   const now = new Date();
@@ -266,6 +267,7 @@ return await (async () => {
             ],
           },
           original_report: cleanMessage,
+          code_version: CODE_VERSION,
         },
       }];
     }
@@ -288,6 +290,7 @@ return await (async () => {
             note: "No stock ticker or stock price claim found; treated as market context, not a per-stock investment report.",
           },
           original_report: cleanMessage,
+          code_version: CODE_VERSION,
         },
       }];
     }
@@ -311,6 +314,7 @@ return await (async () => {
             note: "Ticker briefing without current/target/stop price claims; treated as market context, not a per-stock investment report.",
           },
           original_report: cleanMessage,
+          code_version: CODE_VERSION,
         },
       }];
     }
@@ -360,6 +364,7 @@ return await (async () => {
           blocked_tickers: blockedTickers,
           quotes,
           original_report: cleanMessage,
+          code_version: CODE_VERSION,
         },
       }];
     }
@@ -374,6 +379,7 @@ return await (async () => {
         report_publishable: true,
         non_blocking_warnings: reasonState.warnings,
         validation,
+        code_version: CODE_VERSION,
       },
     }];
   } catch (error) {
@@ -385,6 +391,7 @@ return await (async () => {
         can_send_telegram: true,
         can_insert_db: false,
         report_publishable: false,
+        code_version: CODE_VERSION,
       },
     }];
   }
