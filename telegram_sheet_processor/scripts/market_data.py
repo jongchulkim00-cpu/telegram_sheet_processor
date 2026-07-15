@@ -24,10 +24,72 @@ MAX_CLOSE_DIFF_PCT = 0.5
 MAX_CLAIM_PRICE_DIFF_PCT = 0.5
 MAX_STRATEGY_PRICE_GAP_PCT = 3.0
 
-PRICE_RE = r"([0-9]{1,3}(?:,[0-9]{3})+|[0-9]+)\s*원"
+PRICE_RE = r"([0-9]{1,3}(?:,[0-9]{3})+|[0-9]+)\s*" + chr(0xC6D0)
 REALTIME_ENV_KEYS = ["KIS_APP_KEY", "KIS_APP_SECRET", "KIS_ACCOUNT_NO"]
 ALLOW_STALE_CACHE = os.getenv("ALLOW_STALE_CACHE", "false").lower() in ["1", "true", "yes", "y"]
 
+
+def _parse_json_env(key, default="{}"):
+    raw = os.getenv(key, default)
+    if raw is None:
+        return {}
+    raw = str(raw).strip()
+    if not raw:
+        return {}
+    try:
+        parsed = json.loads(raw)
+    except Exception:
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def _extract_numeric_price(payload):
+    if isinstance(payload, (int, float)) and not isinstance(payload, bool):
+        return float(payload)
+    if isinstance(payload, dict):
+        for key in [
+            "price",
+            "current_price",
+            "currentPrice",
+            "last_price",
+            "lastPrice",
+            "close",
+            "trade_price",
+            "tradePrice",
+            "cur_prc",
+            "stck_prpr",
+        ]:
+            if key in payload:
+                value = payload.get(key)
+                if isinstance(value, (int, float)) and not isinstance(value, bool):
+                    return float(value)
+                if isinstance(value, str):
+                    cleaned = value.replace(",", "").replace("+", "").strip()
+                    try:
+                        return abs(float(cleaned))
+                    except Exception:
+                        pass
+        for key in ["output", "data", "result", "body", "response"]:
+            if key in payload:
+                nested = _extract_numeric_price(payload.get(key))
+                if nested is not None:
+                    return nested
+        for value in payload.values():
+            nested = _extract_numeric_price(value)
+            if nested is not None:
+                return nested
+    if isinstance(payload, list):
+        for item in payload:
+            nested = _extract_numeric_price(item)
+            if nested is not None:
+                return nested
+    if isinstance(payload, str):
+        cleaned = payload.replace(",", "").replace("+", "").strip()
+        try:
+            return abs(float(cleaned))
+        except Exception:
+            return None
+    return None
 
 def today_kst():
     return datetime.now(timezone(timedelta(hours=9))).date()
@@ -398,12 +460,95 @@ def kiwoom_source_status():
     }
 
 
+
+def kiwoom_rest_source_status():
+    enabled = os.getenv("KIWOOM_ENABLED", "false").lower() in ["1", "true", "yes", "y"]
+    rest_enabled = os.getenv("KIWOOM_REST_ENABLED", "false").lower() in ["1", "true", "yes", "y"]
+    quote_url = os.getenv("KIWOOM_REST_QUOTE_URL", "").strip()
+    method = os.getenv("KIWOOM_REST_METHOD", "GET").strip().upper() or "GET"
+    try:
+        timeout_seconds = int(os.getenv("KIWOOM_REST_TIMEOUT_SECONDS", "10"))
+    except Exception:
+        timeout_seconds = 10
+    headers = _parse_json_env("KIWOOM_REST_HEADERS_JSON", "{}")
+    configured = (enabled or rest_enabled) and bool(quote_url)
+    return {
+        "provider": "Kiwoom REST",
+        "enabled": enabled or rest_enabled,
+        "configured": configured,
+        "quote_url_configured": bool(quote_url),
+        "quote_url_template": quote_url,
+        "method": method,
+        "timeout_seconds": timeout_seconds,
+        "headers_configured": bool(headers),
+        "allows_current_price_wording": configured,
+        "note": "Use a service that exposes Kiwoom-style quotes over HTTP so Linux home-server containers can access them.",
+    }
+
+
+def fetch_kiwoom_rest_quote(ticker):
+    status = kiwoom_rest_source_status()
+    if not status.get("configured"):
+        return {
+            "ok": False,
+            "source": "kiwoom_rest",
+            "ticker": ticker,
+            "price": None,
+            "url": None,
+            "error": "Kiwoom REST is not configured.",
+        }
+    url = status["quote_url_template"].format(ticker=ticker)
+    headers = _parse_json_env("KIWOOM_REST_HEADERS_JSON", "{}")
+    body = _parse_json_env("KIWOOM_REST_BODY_JSON", "{}")
+    try:
+        response = requests.request(
+            method=status["method"],
+            url=url,
+            headers=headers,
+            json=body or None,
+            timeout=status["timeout_seconds"],
+        )
+        response.raise_for_status()
+        payload = response.json()
+    except Exception as exc:
+        return {
+            "ok": False,
+            "source": "kiwoom_rest",
+            "ticker": ticker,
+            "price": None,
+            "url": url,
+            "error": str(exc),
+        }
+
+    price = _extract_numeric_price(payload)
+    if price is None:
+        return {
+            "ok": False,
+            "source": "kiwoom_rest",
+            "ticker": ticker,
+            "price": None,
+            "url": url,
+            "error": "No numeric price found in Kiwoom REST response.",
+        }
+
+    return {
+        "ok": True,
+        "source": "kiwoom_rest",
+        "ticker": ticker,
+        "price": float(price),
+        "url": url,
+        "error": None,
+    }
+
+
 def quote_source_status():
     realtime = realtime_source_status()
     kiwoom = kiwoom_source_status()
+    kiwoom_rest = kiwoom_rest_source_status()
     return {
         "primary_realtime": realtime,
         "kiwoom_realtime": kiwoom,
+        "kiwoom_rest_realtime": kiwoom_rest,
         "public_quote": {
             "provider": "Naver Finance public quote",
             "configured": True,
@@ -417,15 +562,21 @@ def quote_source_status():
 
 def report_claims_realtime_wording(report_text):
     text = normalize_report_text(report_text)
-    patterns = ["현재 시세", "현재가", "실시간", "현재 시장", "현재 주가"]
-    return [pattern for pattern in patterns if pattern in text]
+    patterns = [
+        "\ud604\uc7ac\uac00",
+        "\ud604\uc7ac \uc2dc\uc138",
+        "\uc2e4\uc2dc\uac04",
+        "real-time",
+        "realtime",
+        "current price",
+    ]
+    return [pattern for pattern in patterns if pattern.lower() in text.lower()]
 
 
 def report_claims_strict_realtime_wording(report_text):
     text = normalize_report_text(report_text)
-    patterns = ["실시간", "real-time", "realtime"]
+    patterns = ["\uc2e4\uc2dc\uac04", "real-time", "realtime"]
     return [pattern for pattern in patterns if pattern.lower() in text.lower()]
-
 
 def parse_report_date(year, month, day):
     try:
@@ -545,6 +696,7 @@ def report_claims_realtime_wording(report_text):
     patterns = [
         "\ud604\uc7ac\uac00",
         "\ud604\uc7ac \uc2dc\uc138",
+        "\ud604\uc7ac \uc8fc\uac00",
         "\uc2e4\uc2dc\uac04",
         "real-time",
         "realtime",
@@ -558,7 +710,6 @@ def report_claims_strict_realtime_wording(report_text):
     patterns = ["\uc2e4\uc2dc\uac04", "real-time", "realtime"]
     return [pattern for pattern in patterns if pattern.lower() in text.lower()]
 
-
 def extract_report_analysis_dates(report_text):
     text = normalize_report_text(report_text)
     label = (
@@ -569,8 +720,8 @@ def extract_report_analysis_dates(report_text):
         ")"
     )
     patterns = [
-        label + "\\s*[:：-]?\\s*([0-9]{4})\\s*\ub144\\s*([0-9]{1,2})\\s*\uc6d4\\s*([0-9]{1,2})\\s*\uc77c",
-        label + r"\s*[:：-]?\s*([0-9]{4})[-./]([0-9]{1,2})[-./]([0-9]{1,2})",
+        label + "\\s*[:\uff1a-]?\\s*([0-9]{4})\\s*\ub144\\s*([0-9]{1,2})\\s*\uc6d4\\s*([0-9]{1,2})\\s*\uc77c",
+        label + r"\s*[:\uff1a-]?\s*([0-9]{4})[-./]([0-9]{1,2})[-./]([0-9]{1,2})",
     ]
     found = []
     seen = set()
@@ -581,7 +732,6 @@ def extract_report_analysis_dates(report_text):
                 found.append(parsed)
                 seen.add(parsed.isoformat())
     return found
-
 
 def extract_claim_fields(text):
     claimed_price = first_price_after(
@@ -614,7 +764,6 @@ def extract_claim_fields(text):
         "stop_loss": stop_loss,
     }
 
-
 def find_report_evidence_warnings(report_text):
     text = normalize_report_text(report_text)
     evidence_words = [
@@ -643,6 +792,7 @@ def validate_report_text(report_text, days=260, force=False):
     evidence_warnings = find_report_evidence_warnings(report_text)
     realtime_status = realtime_source_status()
     kiwoom_status = kiwoom_source_status()
+    kiwoom_rest_status = kiwoom_rest_source_status()
     realtime_wording = report_claims_realtime_wording(report_text)
     strict_realtime_wording = report_claims_strict_realtime_wording(report_text)
     today = today_kst()
@@ -662,6 +812,7 @@ def validate_report_text(report_text, days=260, force=False):
             "evidence_warnings": evidence_warnings,
             "realtime_source": realtime_status,
             "kiwoom_source": kiwoom_status,
+            "kiwoom_rest_source": kiwoom_rest_status,
             "blocking_reasons": ["No 6-digit Korean stock ticker was found in report text."],
         }
 
@@ -675,6 +826,7 @@ def validate_report_text(report_text, days=260, force=False):
     allows_realtime_wording = (
         realtime_status["allows_current_price_wording"]
         or kiwoom_status["allows_current_price_wording"]
+        or kiwoom_rest_status["allows_current_price_wording"]
     )
     if strict_realtime_wording and not allows_realtime_wording:
         blocking_reasons.append(
@@ -700,6 +852,7 @@ def validate_report_text(report_text, days=260, force=False):
         "evidence_warnings": evidence_warnings,
         "realtime_source": realtime_status,
         "kiwoom_source": kiwoom_status,
+        "kiwoom_rest_source": kiwoom_rest_status,
         "realtime_wording": realtime_wording,
         "strict_realtime_wording": strict_realtime_wording,
         "blocking_reasons": blocking_reasons,

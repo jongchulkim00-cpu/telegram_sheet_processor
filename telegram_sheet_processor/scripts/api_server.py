@@ -356,16 +356,27 @@ def quote_payload(ticker: str, name: Optional[str] = None, days: int = 260, forc
 
     realtime = market_data.realtime_source_status()
     kiwoom = market_data.kiwoom_source_status()
+    kiwoom_rest = market_data.kiwoom_rest_source_status()
     broker_realtime_enabled = bool(
-        realtime.get("allows_current_price_wording") or kiwoom.get("allows_current_price_wording")
+        realtime.get("allows_current_price_wording")
+        or kiwoom.get("allows_current_price_wording")
+        or kiwoom_rest.get("allows_current_price_wording")
     )
     quote_label = "broker_realtime" if broker_realtime_enabled else "public_current_quote"
-    quote_wording = "실시간 현재가" if broker_realtime_enabled else "공개 현재가"
+    quote_wording = "\uc2e4\uc2dc\uac04 \ud604\uc7ac\uac00" if broker_realtime_enabled else "\uacf5\uac1c \ud604\uc7ac\uac00"
+
+    kiwoom_rest_quote = market_data.fetch_kiwoom_rest_quote(ticker)
+    if kiwoom_rest_quote.get("ok"):
+        quote_price = round(float(kiwoom_rest_quote["price"]), 4)
+        quote_source = kiwoom_rest_quote.get("source", "kiwoom_rest")
+        quote_url = kiwoom_rest_quote.get("url")
+        public_quote = {"ok": True, "provider": quote_source, "price": quote_price, "url": quote_url}
+
     message = (
-        f"{display_name}({ticker}) {quote_wording}: {quote_price:,.0f}원\n"
-        f"분석 기준일: {market_data.today_kst().isoformat()}\n"
-        f"데이터 기준일: {meta.get('data_as_of')}\n"
-        f"출처: {quote_source}"
+        f"{display_name}({ticker}) {quote_wording}: {quote_price:,.0f}\uc6d0\n"
+        f"\ubd84\uc11d \uae30\uc900\uc77c: {market_data.today_kst().isoformat()}\n"
+        f"\ub370\uc774\ud130 \uae30\uc900\uc77c: {meta.get('data_as_of')}\n"
+        f"\ucd9c\ucc98: {quote_source}"
     )
     if quote_url:
         message += f"\nURL: {quote_url}"

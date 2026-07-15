@@ -33,3 +33,6 @@ Thumbs.db
 # Secret files
 *secret*
 *credentials*
+*api-key*
+*API Key*
+*키움증권 REST API*.txt
