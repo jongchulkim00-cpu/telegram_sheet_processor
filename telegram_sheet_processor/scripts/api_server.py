@@ -24,7 +24,7 @@ except ImportError:
 
 APP_VERSION = "0.1.0"
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-_STOCK_UNIVERSE_CACHE: dict[str, Any] = {"rows": None, "generated_at": None, "source": None}
+_STOCK_UNIVERSE_CACHE: dict[str, Any] = {"rows": None, "generated_at": None, "source": None, "error": None}
 HOT_TECH_ITEMS = [
     {"ticker": "NVDA", "name": "NVIDIA"},
     {"ticker": "TSLA", "name": "Tesla"},
@@ -348,6 +348,7 @@ def load_stock_universe(force: bool = False) -> tuple[list[dict[str, Any]], str]
 
     rows: list[dict[str, Any]] = []
     source = "fallback"
+    error = None
     try:
         from pykrx import stock
 
@@ -358,7 +359,8 @@ def load_stock_universe(force: bool = False) -> tuple[list[dict[str, Any]], str]
                     rows.append({"ticker": ticker, "name": name, "market": market})
         if rows:
             source = "pykrx"
-    except Exception:
+    except Exception as exc:
+        error = str(exc)
         rows = []
 
     if not rows:
@@ -385,7 +387,7 @@ def load_stock_universe(force: bool = False) -> tuple[list[dict[str, Any]], str]
                 "market": str(row.get("market") or "UNKNOWN"),
             }
     output = sorted(deduped.values(), key=lambda item: (item["market"], item["ticker"]))
-    _STOCK_UNIVERSE_CACHE.update({"rows": output, "generated_at": now_utc(), "source": source})
+    _STOCK_UNIVERSE_CACHE.update({"rows": output, "generated_at": now_utc(), "source": source, "error": error})
     return output, source
 
 
@@ -856,6 +858,27 @@ def stocks_search(q: str = "", limit: int = 20, force: bool = False, include_quo
         return api_error(exc, {"query": q, "limit": limit})
 
 
+@app.get("/stocks/universe/status")
+def stocks_universe_status(force: bool = False) -> dict[str, Any]:
+    try:
+        rows, source = load_stock_universe(force=force)
+        market_counts: dict[str, int] = {}
+        for row in rows:
+            market = str(row.get("market") or "UNKNOWN")
+            market_counts[market] = market_counts.get(market, 0) + 1
+        return api_success({
+            "source": source,
+            "universe_count": len(rows),
+            "market_counts": market_counts,
+            "cache_generated_at": _STOCK_UNIVERSE_CACHE.get("generated_at"),
+            "load_error": _STOCK_UNIVERSE_CACHE.get("error"),
+            "is_full_universe": source == "pykrx" and (market_counts.get("KOSPI", 0) + market_counts.get("KOSDAQ", 0)) > 1000,
+            "search_policy": "KOSPI/KOSDAQ universe is cached in memory after first load. Avoid include_quote=true for broad search because it fetches prices per result.",
+        })
+    except Exception as exc:
+        return api_error(exc)
+
+
 @app.get("/review-roadmap")
 def review_roadmap() -> dict[str, Any]:
     return api_success(roadmap_status())
@@ -1113,7 +1136,6 @@ def review_ui() -> str:
     .tag { display:inline-block; border-radius:999px; padding:3px 8px; font-size:12px; border:1px solid var(--line); background:#f8fafc; color:var(--muted); }
     .hint { font-size:12px; color:var(--muted); margin-top:6px; }
     .roadmap { margin-bottom:16px; }
-    .roadmap-grid { display:grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap:10px; }
     .roadmap ul { margin:8px 0 0; padding-left:18px; color:var(--muted); font-size:13px; }
     .cards { display:grid; grid-template-columns: repeat(4, minmax(120px,1fr)); gap:10px; margin:12px 0; }
     .card { border:1px solid var(--line); border-radius:8px; padding:10px; background:#fbfcff; }
@@ -1141,7 +1163,8 @@ def review_ui() -> str:
         <input id="stockSearch" value="제주반도체" placeholder="예: 한미, 042700, 제주" autocomplete="off" />
         <div id="suggestions" class="suggestions"></div>
       </div>
-      <div class="hint">종목명 또는 종목코드를 입력하고 목록에서 선택하세요.</div>
+      <div class="hint">종목명 또는 종목코드를 입력한 뒤 Enter를 누르면 최상위 검색 결과가 자동 입력됩니다.</div>
+      <div id="universeStatus" class="hint">검색 범위 확인 중</div>
       <label>종목코드</label>
       <input id="ticker" value="080220" placeholder="예: 080220" />
       <label>종목명</label>
@@ -1178,15 +1201,6 @@ def review_ui() -> str:
     </section>
     <section>
       <div class="roadmap">
-        <h2>진행 체크리스트</h2>
-        <div class="roadmap-grid">
-          <div class="card"><span>완료</span><b id="doneCount">-</b></div>
-          <div class="card"><span>진행 중</span><b id="doingCount">-</b></div>
-          <div class="card"><span>다음</span><b id="nextCount">-</b></div>
-        </div>
-        <div id="roadmapDetail" class="hint">로드맵 불러오는 중</div>
-      </div>
-      <div class="roadmap">
         <h2>섹터/테마 분류</h2>
         <div id="sectorDetail" class="hint">테마 분류 불러오는 중</div>
       </div>
@@ -1203,6 +1217,25 @@ def review_ui() -> str:
       $("name").value = item.name;
       $("stockSearch").value = `${item.name} (${item.ticker})`;
       $("suggestions").style.display = "none";
+    }
+    async function selectBestSearchMatch() {
+      const query = $("stockSearch").value.trim();
+      if (!query) return false;
+      const response = await fetch(`/stocks/search?q=${encodeURIComponent(query)}&limit=8`);
+      const data = await response.json();
+      const results = data.results || [];
+      if (!data.ok || !results.length) {
+        $("suggestions").innerHTML = `<div class="suggestion"><small>검색 결과 없음</small></div>`;
+        $("suggestions").style.display = "block";
+        return false;
+      }
+      const exact = results.find((item) => item.ticker === query || item.name === query);
+      const digits = query.replace(/\D/g, "");
+      const prefix = digits
+        ? results.find((item) => item.ticker.startsWith(digits))
+        : results.find((item) => item.name.startsWith(query));
+      selectStock(exact || prefix || results[0]);
+      return true;
     }
     async function autoFillStockFrom(field) {
       const raw = field === "ticker" ? $("ticker").value : $("name").value;
@@ -1249,24 +1282,6 @@ def review_ui() -> str:
       `).join("");
       $("suggestions").style.display = "block";
     }
-    async function loadRoadmap() {
-      try {
-        const response = await fetch("/review-roadmap");
-        const data = await response.json();
-        if (!data.ok) throw new Error(data.error || "roadmap error");
-        $("doneCount").textContent = data.completed.length;
-        $("doingCount").textContent = data.in_progress.length;
-        $("nextCount").textContent = data.next.length;
-        $("roadmapDetail").innerHTML = `
-          <b>진행 중</b>
-          <ul>${data.in_progress.map((item) => `<li>${item}</li>`).join("")}</ul>
-          <b>다음</b>
-          <ul>${data.next.slice(0, 5).map((item) => `<li>${item}</li>`).join("")}</ul>
-        `;
-      } catch (error) {
-        $("roadmapDetail").textContent = "로드맵 로드 실패: " + error.message;
-      }
-    }
     async function loadSectorThemes() {
       try {
         const response = await fetch("/review-sectors");
@@ -1284,12 +1299,37 @@ def review_ui() -> str:
         $("sectorDetail").textContent = "테마 분류 로드 실패: " + error.message;
       }
     }
+    async function loadUniverseStatus() {
+      try {
+        const response = await fetch("/stocks/universe/status");
+        const data = await response.json();
+        if (!data.ok) throw new Error(data.error || "universe error");
+        const status = data.is_full_universe
+          ? `전종목 검색 가능: ${data.universe_count}개 (${data.source})`
+          : `제한 검색: ${data.universe_count}개 (${data.source})`;
+        const reason = data.load_error ? ` · 사유: ${data.load_error}` : "";
+        $("universeStatus").textContent = status + reason;
+      } catch (error) {
+        $("universeStatus").textContent = "검색 범위 확인 실패: " + error.message;
+      }
+    }
     $("stockSearch").addEventListener("input", () => {
       clearTimeout(searchTimer);
       searchTimer = setTimeout(() => searchStocks($("stockSearch").value), 180);
     });
     $("stockSearch").addEventListener("focus", () => {
       if ($("stockSearch").value.trim()) searchStocks($("stockSearch").value);
+    });
+    $("stockSearch").addEventListener("keydown", async (event) => {
+      if (event.key !== "Enter") return;
+      event.preventDefault();
+      clearTimeout(searchTimer);
+      try {
+        await selectBestSearchMatch();
+      } catch (error) {
+        $("suggestions").innerHTML = `<div class="suggestion"><small>검색 오류: ${error.message}</small></div>`;
+        $("suggestions").style.display = "block";
+      }
     });
     $("suggestions").addEventListener("click", (event) => {
       const row = event.target.closest(".suggestion");
@@ -1360,7 +1400,6 @@ def review_ui() -> str:
         if (!data.ok) throw new Error(data.error || "watchlist save error");
         $("batchItems").value = itemsToBatchText(data.items || []);
         $("batchResults").innerHTML = `<p>관심종목 ${data.count}개를 저장했습니다. 중복은 자동 정리됩니다.</p>`;
-        loadRoadmap();
         loadSectorThemes();
       } catch (error) {
         $("batchResults").innerHTML = `<p>관심종목 저장 오류: ${error.message}</p>`;
@@ -1467,9 +1506,9 @@ def review_ui() -> str:
         $("run").disabled = false;
       }
     });
-    loadRoadmap();
     loadWatchlist();
     loadSectorThemes();
+    loadUniverseStatus();
   </script>
 </body>
 </html>

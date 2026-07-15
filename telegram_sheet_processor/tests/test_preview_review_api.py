@@ -19,12 +19,16 @@ class PreviewReviewApiTests(unittest.TestCase):
         self.assertIn("autoFillStockFrom", html)
         self.assertIn("preview-review-batch", html)
         self.assertIn("batchItems", html)
-        self.assertIn("review-roadmap", html)
         self.assertIn("review-watchlist", html)
         self.assertIn("loadWatchlist", html)
         self.assertIn("saveWatchlist", html)
         self.assertIn("review-sectors", html)
         self.assertIn("loadSectorThemes", html)
+        self.assertIn("selectBestSearchMatch", html)
+        self.assertIn("stocks/universe/status", html)
+        self.assertIn("universeStatus", html)
+        self.assertNotIn("진행 체크리스트", html)
+        self.assertNotIn("loadRoadmap", html)
         self.assertIn("include_quote=true", html)
         self.assertIn("ticker", html)
         self.assertIn("BUY", html)
@@ -54,6 +58,15 @@ class PreviewReviewApiTests(unittest.TestCase):
 
         self.assertGreaterEqual(found["count"], 1)
         self.assertEqual(found["results"][0]["ticker"], "042700")
+
+    def test_stock_universe_status_reports_cached_markets(self):
+        status = api_server.stocks_universe_status()
+
+        self.assertTrue(status["ok"])
+        self.assertGreater(status["universe_count"], 0)
+        self.assertIn("search_policy", status)
+        self.assertIn("is_full_universe", status)
+        self.assertIn("load_error", status)
 
     def test_roadmap_status_has_visible_buckets(self):
         roadmap = api_server.roadmap_status()
