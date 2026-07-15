@@ -22,7 +22,7 @@ REPORT_DIR = OUTPUT_DIR / "reports"
 MAX_DATA_AGE_DAYS = 2
 MAX_SOURCE_DATE_DIFF_DAYS = 1
 MAX_CLOSE_DIFF_PCT = 0.5
-MAX_CLAIM_PRICE_DIFF_PCT = 0.5
+MAX_CLAIM_PRICE_DIFF_PCT = float(os.getenv("MAX_CLAIM_PRICE_DIFF_PCT", "1.0"))
 MAX_STRATEGY_PRICE_GAP_PCT = 3.0
 
 PRICE_RE = r"([0-9]{1,3}(?:,[0-9]{3})+|[0-9]+)\s*" + chr(0xC6D0)
@@ -736,6 +736,7 @@ def extract_report_analysis_dates(report_text):
 
 FIELD_LABEL_RE = (
     r"(?:현재\s*(?:시세|가|주가)|현재가|매수.{0,12}?구간|목표가|손절가|"
+    r"claimed_price|current_price|quote_price|buy_low|buy_high|target_price|stop_loss|"
     r"current\s*(?:price|quote)|market\s*price|last\s*price|"
     r"buy.{0,12}?(?:range|zone|area|low)|target\s*price|price\s*target|target|"
     r"stop\s*loss|stoploss|cut\s*loss|risk\s*line)"
@@ -771,8 +772,8 @@ def extract_claim_fields(text):
     )
     buy_low = parse_won(buy_match.group(1)) if buy_match else None
     buy_high = parse_won(buy_match.group(2)) if buy_match else None
-    target_price = first_price_after(r"(?:목표가|target\s*price|price\s*target|target)", text)
-    stop_loss = first_price_after(r"(?:손절가|stop\s*loss|stoploss|cut\s*loss|risk\s*line)", text)
+    target_price = first_price_after(r"(?:목표가|target_price|target\s*price|price\s*target)", text)
+    stop_loss = first_price_after(r"(?:손절가|stop_loss|stop\s*loss|stoploss|cut\s*loss|risk\s*line)", text)
     return {
         "claimed_price": claimed_price,
         "buy_low": buy_low,
@@ -912,8 +913,8 @@ def extract_claim_fields(text):
     )
     buy_low = parse_won(buy_match.group(1)) if buy_match else None
     buy_high = parse_won(buy_match.group(2)) if buy_match else None
-    target_price = first_price_after("(?:\ubaa9\ud45c\uac00|target\\s*price|price\\s*target|target)", text)
-    stop_loss = first_price_after("(?:\uc190\uc808\uac00|stop\\s*loss|stoploss|cut\\s*loss|risk\\s*line)", text)
+    target_price = first_price_after("(?:\ubaa9\ud45c\uac00|target_price|target\\s*price|price\\s*target)", text)
+    stop_loss = first_price_after("(?:\uc190\uc808\uac00|stop_loss|stop\\s*loss|stoploss|cut\\s*loss|risk\\s*line)", text)
     return {
         "claimed_price": claimed_price,
         "buy_low": buy_low,

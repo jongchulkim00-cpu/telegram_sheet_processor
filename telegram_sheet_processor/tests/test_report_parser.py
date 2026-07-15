@@ -26,6 +26,23 @@ class ReportParserTests(unittest.TestCase):
         self.assertIsNone(claims[0]["target_price"])
         self.assertEqual(claims[0]["stop_loss"], 50000)
 
+    def test_target_price_null_json_does_not_steal_stop_loss(self):
+        text = (
+            "분석 기준일: 2026-07-15\n"
+            "가온칩스(399720) 공개 현재가: 55,100원\n"
+            "목표가: 별도 제시 안 함\n"
+            "손절가: 50,000원\n"
+            '<json>{"symbol":"399720","score":65,"decision":"Buy",'
+            '"target_price":null,"stop_loss":50000}</json>'
+        )
+
+        claims = market_data.extract_report_claims(text)
+
+        self.assertEqual(len(claims), 1)
+        self.assertEqual(claims[0]["claimed_price"], 55100)
+        self.assertIsNone(claims[0]["target_price"])
+        self.assertEqual(claims[0]["stop_loss"], 50000)
+
     def test_ticker_briefing_without_price_claim_is_informational(self):
         text = (
             "금일 시장에서 주목받고 있는 주요 이슈 종목 5개에 대한 분석 결과입니다.\n"
