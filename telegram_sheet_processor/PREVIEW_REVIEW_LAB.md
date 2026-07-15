@@ -44,10 +44,11 @@ Preview / Review Lab은 자동매매 조건을 바로 실전에 쓰기 전에 �
 - [x] UI에서 완료/진행/다음 작업 체크리스트 확인
 - [x] 관심종목 리스트 저장/불러오기
 - [x] 관심종목 섹터/테마 1차 분류
+- [x] 코스피/코스닥 벤치마크 대비 상대강도 계산 API/UI
 
 ### 진행 중
 
-- [ ] 코스피/코스닥/섹터 지수 상대강도 비교
+- [ ] 섹터 지수/테마 대표군 상대강도 비교
 
 ### 다음 단계
 
@@ -168,6 +169,27 @@ GET /review-sectors
 - `classification_source`: 현재 분류 방식
 
 주의: 현재 분류는 자동매매 판단용 확정 데이터가 아니라 리뷰 편의용 1차 분류다. 다음 단계에서 KRX 업종, 섹터 지수 상대강도, 뉴스/공시/수급 점수를 붙여 신뢰도를 높인다.
+
+### 시장 대비 상대강도
+
+```http
+GET /review-relative-strength?days=260
+```
+
+관심종목을 시장 벤치마크와 비교한다.
+
+- KOSPI 종목: `KS11`
+- KOSDAQ 종목: `KQ11`
+- UNKNOWN: 일단 `KS11`
+
+응답 핵심 필드:
+
+- `relative_strength.20d`: 최근 약 20거래일 종목 수익률 - 벤치마크 수익률
+- `relative_strength.60d`: 중기 상대강도
+- `relative_strength.120d`: 장기 상대강도
+- `label`: `strong_outperform`, `outperform`, `inline`, `underperform`, `strong_underperform`, `unavailable`
+
+주의: 상대강도는 후보군 필터다. 자동매매 매수 신호가 아니다. 시장 대비 계속 약한 종목은 후보군에서 낮은 우선순위로 돌리고, 시장 대비 강한 종목만 차트 타이밍 검증 대상으로 유지한다.
 
 ## 신호 의미
 

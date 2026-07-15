@@ -6,7 +6,7 @@ existing CLI analysis flow remains usable if the API layer has trouble.
 """
 import json
 import os
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Optional
 
@@ -60,6 +60,12 @@ DEFAULT_REVIEW_WATCHLIST = [
     {"ticker": "399720", "name": "가온칩스"},
     {"ticker": "042700", "name": "한미반도체"},
 ]
+MARKET_BENCHMARKS = {
+    "KOSPI": {"symbol": "KS11", "name": "KOSPI"},
+    "KOSDAQ": {"symbol": "KQ11", "name": "KOSDAQ"},
+    "UNKNOWN": {"symbol": "KS11", "name": "KOSPI"},
+}
+RELATIVE_STRENGTH_WINDOWS = [20, 60, 120]
 THEME_RULES = [
     {
         "key": "semiconductor_ai",
@@ -529,6 +535,200 @@ def review_sector_summary(force: bool = False) -> dict[str, Any]:
     }
 
 
+def frame_return_pct(frame: Any, lookback_rows: int) -> Optional[float]:
+    if frame is None or frame.empty or "close" not in frame.columns:
+        return None
+    if len(frame) < 2:
+        return None
+    start_index = max(0, len(frame) - 1 - int(lookback_rows))
+    start_close = float(frame.iloc[start_index]["close"])
+    end_close = float(frame.iloc[-1]["close"])
+    if not start_close:
+        return None
+    return round((end_close - start_close) / start_close * 100, 4)
+
+
+def benchmark_cache_path(symbol: str) -> Path:
+    safe_symbol = "".join(ch for ch in str(symbol) if ch.isalnum() or ch in ["_", "-"])
+    return market_data.CACHE_DIR / f"INDEX_{safe_symbol}_ohlcv.csv"
+
+
+def fetch_benchmark_ohlcv(symbol: str, name: str, days: int = 260, force: bool = False) -> dict[str, Any]:
+    path = benchmark_cache_path(symbol)
+    end = market_data.today_kst()
+    start = end - timedelta(days=days + 40)
+    if not force and path.exists():
+        cache = market_data.normalize_ohlcv(market_data.pd.read_csv(path, encoding="utf-8-sig"))
+        if not cache.empty:
+            latest = market_data.pd.to_datetime(cache["date"]).max().date()
+            if (end - latest).days <= market_data.MAX_DATA_AGE_DAYS and len(cache) >= min(days // 2, 60):
+                return {
+                    "ok": True,
+                    "symbol": symbol,
+                    "name": name,
+                    "provider": "index_cache",
+                    "frame": cache.tail(days),
+                    "data_as_of": latest.isoformat(),
+                    "error": None,
+                }
+
+    try:
+        frame = market_data.fetch_with_finance_datareader(symbol, start.isoformat(), end.isoformat()).tail(days)
+        if frame.empty:
+            raise RuntimeError(f"No benchmark rows for {symbol}")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        frame.to_csv(path, index=False, encoding="utf-8-sig")
+        latest = market_data.pd.to_datetime(frame["date"]).max().date()
+        return {
+            "ok": True,
+            "symbol": symbol,
+            "name": name,
+            "provider": "FinanceDataReader",
+            "frame": frame,
+            "data_as_of": latest.isoformat(),
+            "error": None,
+        }
+    except Exception as exc:
+        if path.exists():
+            cache = market_data.normalize_ohlcv(market_data.pd.read_csv(path, encoding="utf-8-sig")).tail(days)
+            if not cache.empty and market_data.ALLOW_STALE_CACHE:
+                latest = market_data.pd.to_datetime(cache["date"]).max().date()
+                return {
+                    "ok": True,
+                    "symbol": symbol,
+                    "name": name,
+                    "provider": "stale_index_cache",
+                    "frame": cache,
+                    "data_as_of": latest.isoformat(),
+                    "error": str(exc),
+                }
+        return {
+            "ok": False,
+            "symbol": symbol,
+            "name": name,
+            "provider": None,
+            "frame": None,
+            "data_as_of": None,
+            "error": str(exc),
+        }
+
+
+def benchmark_for_market(market: str) -> dict[str, str]:
+    return MARKET_BENCHMARKS.get(str(market or "UNKNOWN").upper(), MARKET_BENCHMARKS["UNKNOWN"])
+
+
+def relative_strength_label(score_60d: Optional[float]) -> str:
+    if score_60d is None:
+        return "unavailable"
+    if score_60d >= 8:
+        return "strong_outperform"
+    if score_60d >= 3:
+        return "outperform"
+    if score_60d <= -8:
+        return "strong_underperform"
+    if score_60d <= -3:
+        return "underperform"
+    return "inline"
+
+
+def relative_strength_for_item(item: dict[str, Any], days: int = 260, force: bool = False) -> dict[str, Any]:
+    ticker = str(item.get("ticker") or "").strip()
+    name = str(item.get("name") or ticker)
+    market = str(item.get("market") or "UNKNOWN")
+    benchmark = benchmark_for_market(market)
+    output = {
+        "ticker": ticker,
+        "name": name,
+        "market": market,
+        "benchmark": benchmark,
+        "available": False,
+        "provider": None,
+        "data_as_of": None,
+        "returns": {},
+        "relative_strength": {},
+        "label": "unavailable",
+        "error": None,
+    }
+    try:
+        stock_fetch = market_data.fetch_ohlcv(ticker, name, days=days, force=force)
+        benchmark_fetch = fetch_benchmark_ohlcv(
+            benchmark["symbol"],
+            benchmark["name"],
+            days=days,
+            force=force,
+        )
+        if not benchmark_fetch["ok"]:
+            raise RuntimeError(benchmark_fetch["error"] or "Benchmark unavailable")
+
+        stock_returns = {}
+        benchmark_returns = {}
+        relative = {}
+        for window in RELATIVE_STRENGTH_WINDOWS:
+            stock_return = frame_return_pct(stock_fetch.frame, window)
+            benchmark_return = frame_return_pct(benchmark_fetch["frame"], window)
+            stock_returns[f"{window}d"] = stock_return
+            benchmark_returns[f"{window}d"] = benchmark_return
+            relative[f"{window}d"] = (
+                round(stock_return - benchmark_return, 4)
+                if stock_return is not None and benchmark_return is not None
+                else None
+            )
+
+        output.update({
+            "available": True,
+            "provider": {
+                "stock": stock_fetch.provider,
+                "benchmark": benchmark_fetch["provider"],
+            },
+            "data_as_of": {
+                "stock": market_data.latest_data_meta(stock_fetch.frame).get("data_as_of"),
+                "benchmark": benchmark_fetch["data_as_of"],
+            },
+            "returns": {
+                "stock": stock_returns,
+                "benchmark": benchmark_returns,
+            },
+            "relative_strength": relative,
+            "label": relative_strength_label(relative.get("60d")),
+        })
+    except Exception as exc:
+        output["error"] = str(exc)
+    return output
+
+
+def review_relative_strength_summary(days: int = 260, force: bool = False) -> dict[str, Any]:
+    markets = market_by_ticker(force=False)
+    items = []
+    errors = []
+    for item in load_review_watchlist()[:REVIEW_WATCHLIST_LIMIT]:
+        enriched = {
+            **item,
+            "market": markets.get(item["ticker"], "UNKNOWN"),
+        }
+        result = relative_strength_for_item(enriched, days=days, force=force)
+        result["classification"] = classify_stock_theme(
+            enriched["ticker"],
+            enriched.get("name"),
+            enriched.get("market"),
+        )
+        if result.get("available"):
+            items.append(result)
+        else:
+            errors.append(result)
+    items.sort(key=lambda row: (
+        row.get("relative_strength", {}).get("60d") is None,
+        -(row.get("relative_strength", {}).get("60d") or -9999),
+    ))
+    return {
+        "items": items,
+        "errors": errors,
+        "count": len(items),
+        "error_count": len(errors),
+        "windows": RELATIVE_STRENGTH_WINDOWS,
+        "policy": "Relative strength is a candidate filter only. Keep outperformers under review and deprioritize persistent underperformers before automated trading.",
+    }
+
+
 def normalize_review_watchlist_items(items: list[Any]) -> list[dict[str, str]]:
     normalized: list[dict[str, str]] = []
     seen: set[str] = set()
@@ -904,6 +1104,15 @@ def review_sectors(force: bool = False) -> dict[str, Any]:
         return api_error(exc)
 
 
+@app.get("/review-relative-strength")
+def review_relative_strength(days: int = 260, force: bool = False) -> dict[str, Any]:
+    try:
+        days = max(120, min(int(days or 260), 780))
+        return api_success(review_relative_strength_summary(days=days, force=force))
+    except Exception as exc:
+        return api_error(exc)
+
+
 @app.post("/review-watchlist")
 def review_watchlist_post(request: ReviewWatchlistRequest) -> dict[str, Any]:
     items = save_review_watchlist(request.items)
@@ -1204,6 +1413,12 @@ def review_ui() -> str:
         <h2>섹터/테마 분류</h2>
         <div id="sectorDetail" class="hint">테마 분류 불러오는 중</div>
       </div>
+      <div class="roadmap">
+        <h2>시장 대비 상대강도</h2>
+        <div class="hint">관심종목을 코스피/코스닥 벤치마크와 비교합니다. 계산량이 있어 버튼 실행 방식입니다.</div>
+        <button id="loadRelativeStrength" type="button">상대강도 계산</button>
+        <div id="relativeStrengthDetail" class="hint">대기 중</div>
+      </div>
       <h2>차트 리뷰</h2>
       <iframe id="chart" title="preview review chart"></iframe>
     </section>
@@ -1299,6 +1514,43 @@ def review_ui() -> str:
         $("sectorDetail").textContent = "테마 분류 로드 실패: " + error.message;
       }
     }
+    function renderRelativeStrengthTable(items, errors) {
+      const rows = (items || []).map((item) => {
+        const rs = item.relative_strength || {};
+        const returns = item.returns || {};
+        const stock = returns.stock || {};
+        return `<tr>
+          <td>${item.name}<br><small>${item.ticker}</small></td>
+          <td>${item.classification ? item.classification.primary_theme : "-"}</td>
+          <td>${item.benchmark.name}</td>
+          <td>${fmt(stock["20d"])}%</td>
+          <td>${fmt(rs["20d"])}%</td>
+          <td>${fmt(rs["60d"])}%</td>
+          <td>${fmt(rs["120d"])}%</td>
+          <td>${item.label}</td>
+        </tr>`;
+      }).join("");
+      const errorRows = (errors || []).map((item) => `<tr><td>${item.name}<br><small>${item.ticker}</small></td><td colspan="7">상대강도 계산 실패: ${item.error}</td></tr>`).join("");
+      if (!rows && !errorRows) return "<p>상대강도 결과가 없습니다.</p>";
+      return `<table><thead><tr><th>종목</th><th>테마</th><th>기준지수</th><th>20일 수익률</th><th>20일 RS</th><th>60일 RS</th><th>120일 RS</th><th>판정</th></tr></thead><tbody>${rows}${errorRows}</tbody></table>`;
+    }
+    async function loadRelativeStrength() {
+      $("loadRelativeStrength").disabled = true;
+      $("relativeStrengthDetail").innerHTML = "<p>상대강도 계산 중입니다. 관심종목 수와 데이터 상태에 따라 시간이 걸릴 수 있습니다.</p>";
+      try {
+        const response = await fetch(`/review-relative-strength?days=${Number($("days").value)}&force=${$("force").checked}`);
+        const data = await response.json();
+        if (!data.ok) throw new Error(data.error || "relative strength error");
+        $("relativeStrengthDetail").innerHTML = `
+          <p>계산 완료: 성공 ${data.count}개 / 실패 ${data.error_count}개</p>
+          ${renderRelativeStrengthTable(data.items || [], data.errors || [])}
+        `;
+      } catch (error) {
+        $("relativeStrengthDetail").innerHTML = `<p>상대강도 계산 오류: ${error.message}</p>`;
+      } finally {
+        $("loadRelativeStrength").disabled = false;
+      }
+    }
     async function loadUniverseStatus() {
       try {
         const response = await fetch("/stocks/universe/status");
@@ -1340,6 +1592,7 @@ def review_ui() -> str:
     $("ticker").addEventListener("blur", () => autoFillStockFrom("ticker"));
     $("name").addEventListener("change", () => autoFillStockFrom("name"));
     $("name").addEventListener("blur", () => autoFillStockFrom("name"));
+    $("loadRelativeStrength").addEventListener("click", loadRelativeStrength);
     document.addEventListener("click", (event) => {
       if (!event.target.closest(".search-wrap")) $("suggestions").style.display = "none";
     });

@@ -1,6 +1,7 @@
 import unittest
 import sys
 from pathlib import Path
+import pandas as pd
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "scripts"))
@@ -27,6 +28,8 @@ class PreviewReviewApiTests(unittest.TestCase):
         self.assertIn("selectBestSearchMatch", html)
         self.assertIn("stocks/universe/status", html)
         self.assertIn("universeStatus", html)
+        self.assertIn("review-relative-strength", html)
+        self.assertIn("loadRelativeStrength", html)
         self.assertNotIn("진행 체크리스트", html)
         self.assertNotIn("loadRoadmap", html)
         self.assertIn("include_quote=true", html)
@@ -122,6 +125,23 @@ class PreviewReviewApiTests(unittest.TestCase):
             api_server.REVIEW_WATCHLIST_PATH = original_path
             if temp_path.exists():
                 temp_path.unlink()
+
+    def test_frame_return_pct_calculates_lookback_return(self):
+        frame = pd.DataFrame({
+            "date": ["2026-01-01", "2026-01-02", "2026-01-03"],
+            "close": [100, 110, 121],
+        })
+
+        self.assertEqual(api_server.frame_return_pct(frame, 2), 21.0)
+        self.assertEqual(api_server.frame_return_pct(frame, 1), 10.0)
+
+    def test_relative_strength_label_thresholds(self):
+        self.assertEqual(api_server.relative_strength_label(8), "strong_outperform")
+        self.assertEqual(api_server.relative_strength_label(3), "outperform")
+        self.assertEqual(api_server.relative_strength_label(0), "inline")
+        self.assertEqual(api_server.relative_strength_label(-3), "underperform")
+        self.assertEqual(api_server.relative_strength_label(-8), "strong_underperform")
+        self.assertEqual(api_server.relative_strength_label(None), "unavailable")
 
 
 if __name__ == "__main__":
