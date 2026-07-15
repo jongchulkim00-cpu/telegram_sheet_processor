@@ -18,9 +18,11 @@ from pydantic import AliasChoices, BaseModel, Field
 try:
     from . import market_data
     from . import preview_review_engine
+    from . import trade_automation_policy
 except ImportError:
     import market_data
     import preview_review_engine
+    import trade_automation_policy
 
 APP_VERSION = "0.1.0"
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -212,6 +214,12 @@ class PreviewReviewRequest(BaseModel):
 
 class PreviewReviewBatchRequest(BaseModel):
     items: list[PreviewReviewRequest]
+    days: int = Field(default=260, ge=60, le=1200)
+    force: bool = False
+
+
+class AutomationCandidatesRequest(BaseModel):
+    items: list[PreviewReviewRequest] = Field(default_factory=list)
     days: int = Field(default=260, ge=60, le=1200)
     force: bool = False
 
@@ -1247,6 +1255,99 @@ def compact_preview_review(result: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def build_automation_candidate(item: PreviewReviewRequest, days: int = 260, force: bool = False) -> dict[str, Any]:
+    effective = item.copy(update={
+        "days": days,
+        "force": item.force or force,
+    })
+    name = effective.name or market_data.lookup_pykrx_name(effective.ticker) or effective.ticker
+    review_result = preview_review_engine.run(
+        effective.ticker.strip(),
+        name=name,
+        days=effective.days,
+        force=effective.force,
+    )
+    compact_review = compact_preview_review(review_result)
+    quote = quote_payload(effective.ticker.strip(), name=name, days=min(effective.days, 260), force=effective.force)
+    try:
+        enriched = {"ticker": effective.ticker.strip(), "name": name}
+        stock_row = search_stock_universe(effective.ticker.strip(), limit=1).get("results", [])
+        if stock_row:
+            enriched.update(stock_row[0])
+        relative_strength = relative_strength_for_item(enriched, days=effective.days, force=effective.force)
+    except Exception as exc:
+        relative_strength = {
+            "ticker": effective.ticker.strip(),
+            "name": name,
+            "error": str(exc),
+            "relative_strength": {},
+        }
+    decision = trade_automation_policy.evaluate_candidate(
+        compact_review,
+        quote=quote,
+        relative_strength=relative_strength,
+    )
+    return {
+        "ticker": effective.ticker.strip(),
+        "name": name,
+        "decision": decision,
+        "review": compact_review,
+        "quote": quote,
+        "relative_strength": relative_strength,
+    }
+
+
+@app.get("/automation/status")
+def automation_status() -> dict[str, Any]:
+    return api_success({
+        "automation": trade_automation_policy.automation_status(),
+        "quote_sources": market_data.quote_source_status(),
+        "order_execution_policy": (
+            "This API currently produces order candidates only. Actual Kiwoom order submission "
+            "must be implemented behind explicit approval/live-order gates."
+        ),
+    })
+
+
+@app.post("/automation/candidates")
+def automation_candidates(request: AutomationCandidatesRequest) -> dict[str, Any]:
+    source_items = request.items
+    if not source_items:
+        source_items = [
+            PreviewReviewRequest(ticker=item["ticker"], name=item.get("name"), days=request.days, force=request.force)
+            for item in load_review_watchlist()
+        ]
+    results = []
+    errors = []
+    for item in source_items[:REVIEW_WATCHLIST_LIMIT]:
+        try:
+            results.append(build_automation_candidate(item, days=request.days, force=request.force))
+        except Exception as exc:
+            errors.append({
+                "ticker": item.ticker,
+                "name": item.name,
+                "error": str(exc),
+            })
+    orderable = [
+        row for row in results
+        if row.get("decision", {}).get("can_submit_order") or row.get("decision", {}).get("requires_human_approval")
+    ]
+    return api_success({
+        "analysis_date": market_data.today_kst().isoformat(),
+        "count": len(results),
+        "candidate_count": len(orderable),
+        "error_count": len(errors),
+        "max_items": REVIEW_WATCHLIST_LIMIT,
+        "automation": trade_automation_policy.automation_status(),
+        "results": results,
+        "errors": errors,
+        "policy": (
+            "Candidates are not orders. Daily review signals must be confirmed by broker realtime "
+            "and intraday strategy gates before live order submission."
+        ),
+    })
+
+
 @app.post("/preview-review")
 def preview_review(request: PreviewReviewRequest) -> dict[str, Any]:
     try:
@@ -1423,6 +1524,16 @@ def review_ui_tabler() -> str:
                 </div>
               </div>
             </div>
+            <div class="col-12">
+              <div class="card">
+                <div class="card-header"><h2 class="card-title">자동화 후보 판정</h2></div>
+                <div class="card-body">
+                  <p class="text-secondary">관찰 종목을 주문 후보로 승격할 수 있는지 점검합니다. 현재 기본 모드는 review_only라서 실제 주문은 생성하지 않습니다.</p>
+                  <button id="loadAutomationCandidates" class="btn btn-warning" type="button">자동화 후보 점검</button>
+                  <div id="automationCandidates" class="table-responsive mt-3"></div>
+                </div>
+              </div>
+            </div>
           </div>
         </div>
       </div>
@@ -1504,6 +1615,24 @@ def review_ui_tabler() -> str:
       const rows = (data.results || []).map(r => `<tr><td class="mono">${esc(r.ticker)}</td><td>${esc(r.name)}</td><td>${esc(r.market || '-')}</td><td>${fmt(r.stock_return_pct)}%</td><td>${fmt(r.benchmark_return_pct)}%</td><td>${fmt(r.relative_strength_pct)}%</td><td>${esc(r.label || '-')}</td><td>${esc(r.error || '')}</td></tr>`).join('');
       $('relativeStrengthDetail').innerHTML = rows ? `<table class="table card-table table-vcenter"><thead><tr><th>코드</th><th>종목</th><th>시장</th><th>종목</th><th>지수</th><th>초과</th><th>판정</th><th>오류</th></tr></thead><tbody>${rows}</tbody></table>` : '<div class="text-secondary">상대강도 결과 없음</div>';
     }
+    async function loadAutomationCandidates() {
+      const items = parseBatchItems();
+      const body = items.length ? {items, days:Number($('days').value), force:$('force').checked} : {
+        items:[{ticker:$('ticker').value.trim(), name:$('name').value.trim()}],
+        days:Number($('days').value),
+        force:$('force').checked
+      };
+      $('automationCandidates').innerHTML = '<div class="text-secondary">자동화 후보 점검 중...</div>';
+      const res = await fetch('/automation/candidates', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body) });
+      const data = await res.json();
+      const rows = (data.results || []).map(r => {
+        const d = r.decision || {};
+        const blockers = (d.blockers || []).map(esc).join('<br>');
+        const warnings = (d.warnings || []).map(esc).join('<br>');
+        return `<tr><td class="mono">${esc(r.ticker)}</td><td>${esc(r.name)}</td><td>${badge(d.latest_signal)}</td><td>${esc(d.action || '-')}</td><td>${esc(d.side || '-')}</td><td>${d.quantity || 0}</td><td>${fmt(d.estimated_amount_krw)}</td><td>${blockers}</td><td>${warnings}</td></tr>`;
+      }).join('');
+      $('automationCandidates').innerHTML = rows ? `<table class="table card-table table-vcenter"><thead><tr><th>코드</th><th>종목</th><th>신호</th><th>판정</th><th>방향</th><th>수량</th><th>예상금액</th><th>차단 사유</th><th>경고</th></tr></thead><tbody>${rows}</tbody></table>` : '<div class="empty"><p class="empty-title">자동화 후보 없음</p></div>';
+    }
     async function loadUniverseStatus() {
       const res = await fetch('/stocks/universe/status');
       const data = await res.json();
@@ -1528,6 +1657,7 @@ def review_ui_tabler() -> str:
       $('status').textContent = JSON.stringify({ok:data.ok, count:data.count, error_count:data.error_count}, null, 2);
     });
     $('loadRelativeStrength').addEventListener('click', loadRelativeStrength);
+    $('loadAutomationCandidates').addEventListener('click', loadAutomationCandidates);
     $('run').addEventListener('click', async () => {
       try {
         $('status').textContent = '리뷰 생성 중...';

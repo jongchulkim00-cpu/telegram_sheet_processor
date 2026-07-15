@@ -31,6 +31,8 @@ class PreviewReviewApiTests(unittest.TestCase):
         self.assertIn("universeStatus", html)
         self.assertIn("review-relative-strength", html)
         self.assertIn("loadRelativeStrength", html)
+        self.assertIn("automation/candidates", html)
+        self.assertIn("loadAutomationCandidates", html)
         self.assertIn("종목명을 입력하고 Enter", html)
         self.assertNotIn('id="stockSearch"', html)
         self.assertNotIn("종목 검색</label>", html)
@@ -151,6 +153,14 @@ class PreviewReviewApiTests(unittest.TestCase):
         self.assertEqual(api_server.relative_strength_label(-3), "underperform")
         self.assertEqual(api_server.relative_strength_label(-8), "strong_underperform")
         self.assertEqual(api_server.relative_strength_label(None), "unavailable")
+
+    def test_automation_status_is_conservative_by_default(self):
+        status = api_server.automation_status()
+
+        self.assertTrue(status["ok"])
+        self.assertEqual(status["automation"]["mode"], "review_only")
+        self.assertFalse(status["automation"]["allow_live_orders"])
+        self.assertIn("Actual Kiwoom order submission", status["order_execution_policy"])
 
 
 if __name__ == "__main__":
