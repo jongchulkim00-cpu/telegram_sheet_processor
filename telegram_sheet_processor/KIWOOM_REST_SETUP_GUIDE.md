@@ -1,10 +1,44 @@
 # Kiwoom REST Bridge Setup Guide
 
-This project supports a small HTTP bridge that the Linux home-server stock API
-can call. The bridge starts in mock mode and can later call Kiwoom REST API
-directly.
+This project supports two Kiwoom REST paths:
 
-## 1. Local Bridge Modes
+- Direct mode: the existing Linux home-server stock API calls Kiwoom REST with
+  `KIWOOM_REST_APP_KEY` and `KIWOOM_REST_APP_SECRET`. This is preferred because
+  it needs no extra port.
+- Bridge mode: a separate HTTP bridge exposes `/quote/{ticker}` for the stock
+  API to call. Use this only when direct outbound REST is not available.
+
+## 1. Direct Mode In The Existing Stock API
+
+Edit `/opt/telegram_sheet_processor/.env` on the home server:
+
+```env
+KIWOOM_ENABLED=true
+KIWOOM_REST_ENABLED=true
+KIWOOM_REST_BASE_URL=https://api.kiwoom.com
+KIWOOM_REST_APP_KEY=your_real_app_key
+KIWOOM_REST_APP_SECRET=your_real_app_secret
+KIWOOM_REST_QUOTE_URL=
+KIWOOM_REST_TIMEOUT_SECONDS=10
+```
+
+Then restart:
+
+```bash
+cd /opt/telegram_sheet_processor
+docker compose up -d --build telegram-sheet-stock-api
+```
+
+Verify:
+
+```bash
+curl http://localhost:8010/source-status
+curl -X POST http://localhost:8010/quote \
+  -H "Content-Type: application/json" \
+  -d '{"ticker":"005930","force":true}'
+```
+
+## 2. Local Bridge Modes
 
 ### Mock Mode
 
@@ -48,7 +82,7 @@ The bridge uses:
 - API ID: `ka10001`
 - Request body: `{"stk_cd": "005930"}`
 
-## 2. Expose the Bridge to the Home Server
+## 3. Expose the Bridge to the Home Server
 
 Choose one:
 
@@ -59,7 +93,7 @@ Choose one:
 For the first test, LAN is simplest. Make sure Windows Firewall allows inbound
 TCP 8080 from the home server.
 
-## 3. Configure the Home Server
+## 4. Configure the Home Server For Bridge Mode
 
 Edit `/opt/telegram_sheet_processor/.env` on the home server:
 
@@ -78,7 +112,7 @@ cd /opt/telegram_sheet_processor
 docker compose up -d --build
 ```
 
-## 4. Verify from the Home Server
+## 5. Verify from the Home Server
 
 ```bash
 curl http://192.168.1.50:8080/health
@@ -100,7 +134,7 @@ Expected `/source-status` once configured:
 }
 ```
 
-## 5. Security Notes
+## 6. Security Notes
 
 - Rotate keys if they were pasted into chat, screenshots, or plain text.
 - Keep real keys only in `.env` or OS environment variables.

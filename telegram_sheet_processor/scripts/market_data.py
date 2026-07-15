@@ -5,6 +5,7 @@ import json
 import math
 import os
 import re
+import time
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
@@ -27,6 +28,7 @@ MAX_STRATEGY_PRICE_GAP_PCT = 3.0
 PRICE_RE = r"([0-9]{1,3}(?:,[0-9]{3})+|[0-9]+)\s*" + chr(0xC6D0)
 REALTIME_ENV_KEYS = ["KIS_APP_KEY", "KIS_APP_SECRET", "KIS_ACCOUNT_NO"]
 ALLOW_STALE_CACHE = os.getenv("ALLOW_STALE_CACHE", "false").lower() in ["1", "true", "yes", "y"]
+_KIWOOM_REST_TOKEN_CACHE = {"token": None, "expires_at": 0.0, "expires_dt": None}
 
 
 def _parse_json_env(key, default="{}"):
@@ -466,23 +468,100 @@ def kiwoom_rest_source_status():
     rest_enabled = os.getenv("KIWOOM_REST_ENABLED", "false").lower() in ["1", "true", "yes", "y"]
     quote_url = os.getenv("KIWOOM_REST_QUOTE_URL", "").strip()
     method = os.getenv("KIWOOM_REST_METHOD", "GET").strip().upper() or "GET"
+    base_url = os.getenv("KIWOOM_REST_BASE_URL", "https://mockapi.kiwoom.com").rstrip("/")
+    app_key = os.getenv("KIWOOM_REST_APP_KEY", "").strip()
+    app_secret = os.getenv("KIWOOM_REST_APP_SECRET", "").strip()
     try:
         timeout_seconds = int(os.getenv("KIWOOM_REST_TIMEOUT_SECONDS", "10"))
     except Exception:
         timeout_seconds = 10
     headers = _parse_json_env("KIWOOM_REST_HEADERS_JSON", "{}")
-    configured = (enabled or rest_enabled) and bool(quote_url)
+    direct_configured = bool(app_key and app_secret)
+    configured = (enabled or rest_enabled) and (bool(quote_url) or direct_configured)
     return {
         "provider": "Kiwoom REST",
         "enabled": enabled or rest_enabled,
         "configured": configured,
         "quote_url_configured": bool(quote_url),
         "quote_url_template": quote_url,
+        "direct_api_configured": direct_configured,
+        "base_url": base_url,
+        "app_key_configured": bool(app_key),
+        "app_secret_configured": bool(app_secret),
         "method": method,
         "timeout_seconds": timeout_seconds,
         "headers_configured": bool(headers),
         "allows_current_price_wording": configured,
-        "note": "Use a service that exposes Kiwoom-style quotes over HTTP so Linux home-server containers can access them.",
+        "note": "Set KIWOOM_REST_APP_KEY and KIWOOM_REST_APP_SECRET for direct Kiwoom REST calls, or KIWOOM_REST_QUOTE_URL for an external bridge.",
+    }
+
+
+def _kiwoom_rest_token_cache_is_valid():
+    token = _KIWOOM_REST_TOKEN_CACHE.get("token")
+    expires_at = float(_KIWOOM_REST_TOKEN_CACHE.get("expires_at") or 0)
+    return bool(token) and time.time() < expires_at - 60
+
+
+def _get_kiwoom_rest_access_token(status):
+    if _kiwoom_rest_token_cache_is_valid():
+        return str(_KIWOOM_REST_TOKEN_CACHE["token"])
+
+    app_key = os.getenv("KIWOOM_REST_APP_KEY", "").strip()
+    app_secret = os.getenv("KIWOOM_REST_APP_SECRET", "").strip()
+    if not app_key or not app_secret:
+        raise ValueError("KIWOOM_REST_APP_KEY and KIWOOM_REST_APP_SECRET are required for direct Kiwoom REST.")
+
+    response = requests.post(
+        f"{status['base_url']}/oauth2/token",
+        headers={"Content-Type": "application/json;charset=UTF-8"},
+        json={
+            "grant_type": "client_credentials",
+            "appkey": app_key,
+            "secretkey": app_secret,
+        },
+        timeout=status["timeout_seconds"],
+    )
+    response.raise_for_status()
+    payload = response.json()
+    token = payload.get("token")
+    if not token:
+        raise ValueError(f"Kiwoom token response did not contain token: {payload.get('return_msg') or payload}")
+
+    _KIWOOM_REST_TOKEN_CACHE.update({
+        "token": token,
+        "expires_at": time.time() + 55 * 60,
+        "expires_dt": payload.get("expires_dt"),
+    })
+    return str(token)
+
+
+def _fetch_kiwoom_rest_direct_quote(ticker, status):
+    token = _get_kiwoom_rest_access_token(status)
+    response = requests.post(
+        f"{status['base_url']}/api/dostk/stkinfo",
+        headers={
+            "Content-Type": "application/json;charset=UTF-8",
+            "authorization": f"Bearer {token}",
+            "api-id": "ka10001",
+        },
+        json={"stk_cd": ticker},
+        timeout=status["timeout_seconds"],
+    )
+    response.raise_for_status()
+    payload = response.json()
+    price = _extract_numeric_price(payload)
+    if price is None:
+        raise ValueError(f"No numeric price found in Kiwoom REST response: {payload}")
+    return {
+        "ok": True,
+        "source": "kiwoom_rest_ka10001",
+        "ticker": ticker,
+        "name": payload.get("stk_nm"),
+        "price": float(price),
+        "url": f"{status['base_url']}/api/dostk/stkinfo",
+        "api_id": "ka10001",
+        "raw": payload,
+        "error": None,
     }
 
 
@@ -497,6 +576,19 @@ def fetch_kiwoom_rest_quote(ticker):
             "url": None,
             "error": "Kiwoom REST is not configured.",
         }
+    if status.get("direct_api_configured") and not status.get("quote_url_configured"):
+        try:
+            return _fetch_kiwoom_rest_direct_quote(ticker, status)
+        except Exception as exc:
+            return {
+                "ok": False,
+                "source": "kiwoom_rest_ka10001",
+                "ticker": ticker,
+                "price": None,
+                "url": f"{status['base_url']}/api/dostk/stkinfo",
+                "error": str(exc),
+            }
+
     url = status["quote_url_template"].format(ticker=ticker)
     headers = _parse_json_env("KIWOOM_REST_HEADERS_JSON", "{}")
     body = _parse_json_env("KIWOOM_REST_BODY_JSON", "{}")
