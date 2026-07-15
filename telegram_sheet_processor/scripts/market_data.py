@@ -636,6 +636,42 @@ def fetch_kiwoom_rest_quote(ticker):
     }
 
 
+def fetch_best_current_quote(ticker):
+    """Return the best available current quote.
+
+    Priority is broker-grade Kiwoom REST first, then public Naver quote.
+    Daily OHLCV close remains the caller's final fallback because it needs the
+    already-fetched candle frame.
+    """
+    kiwoom_rest_quote = fetch_kiwoom_rest_quote(ticker)
+    if kiwoom_rest_quote.get("ok"):
+        return {
+            "ok": True,
+            "provider": kiwoom_rest_quote.get("source", "kiwoom_rest"),
+            "price": float(kiwoom_rest_quote["price"]),
+            "url": kiwoom_rest_quote.get("url"),
+            "raw": kiwoom_rest_quote,
+            "priority": "broker_kiwoom_rest",
+        }
+
+    public_quote = fetch_naver_public_quote(ticker)
+    if public_quote.get("ok"):
+        public_quote = dict(public_quote)
+        public_quote["priority"] = "public_naver"
+        public_quote["kiwoom_rest_error"] = kiwoom_rest_quote.get("error")
+        return public_quote
+
+    return {
+        "ok": False,
+        "provider": None,
+        "price": None,
+        "url": None,
+        "priority": "none",
+        "kiwoom_rest_error": kiwoom_rest_quote.get("error"),
+        "naver_error": public_quote.get("error"),
+    }
+
+
 def quote_source_status():
     realtime = realtime_source_status()
     kiwoom = kiwoom_source_status()
@@ -698,9 +734,26 @@ def extract_report_analysis_dates(report_text):
     return found
 
 
+FIELD_LABEL_RE = (
+    r"(?:현재\s*(?:시세|가|주가)|현재가|매수.{0,12}?구간|목표가|손절가|"
+    r"current\s*(?:price|quote)|market\s*price|last\s*price|"
+    r"buy.{0,12}?(?:range|zone|area|low)|target\s*price|price\s*target|target|"
+    r"stop\s*loss|stoploss|cut\s*loss|risk\s*line)"
+)
+
+
 def first_price_after(pattern, text):
-    match = re.search(pattern + r".{0,80}?" + PRICE_RE, text, flags=re.IGNORECASE | re.DOTALL)
-    return parse_won(match.groups()[-1]) if match else None
+    label_match = re.search(pattern, text, flags=re.IGNORECASE | re.DOTALL)
+    if not label_match:
+        return None
+    window = text[label_match.end():label_match.end() + 120]
+    price_match = re.search(PRICE_RE, window, flags=re.IGNORECASE | re.DOTALL)
+    if not price_match:
+        return None
+    before_price = window[:price_match.start()]
+    if re.search(FIELD_LABEL_RE, before_price, flags=re.IGNORECASE | re.DOTALL):
+        return None
+    return parse_won(price_match.group(1))
 
 
 def extract_claim_fields(text):
@@ -974,7 +1027,7 @@ def verify_price_claims(claims, days=260, force=False):
             meta = latest_data_meta(fetch.frame)
             latest = fetch.frame.iloc[-1]
             actual_close = round(float(latest["close"]), 4)
-            public_quote = fetch_naver_public_quote(ticker)
+            public_quote = fetch_best_current_quote(ticker)
             verified_price = round(float(public_quote["price"]), 4) if public_quote.get("ok") else actual_close
             verified_price_source = public_quote["provider"] if public_quote.get("ok") else fetch.provider
             price_diff = None

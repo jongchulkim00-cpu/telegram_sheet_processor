@@ -343,7 +343,7 @@ def quote_payload(ticker: str, name: Optional[str] = None, days: int = 260, forc
     meta = market_data.latest_data_meta(fetch.frame)
     latest = fetch.frame.iloc[-1]
     daily_close = round(float(latest["close"]), 4)
-    public_quote = market_data.fetch_naver_public_quote(ticker)
+    public_quote = market_data.fetch_best_current_quote(ticker)
 
     if public_quote.get("ok"):
         quote_price = round(float(public_quote["price"]), 4)
@@ -364,13 +364,6 @@ def quote_payload(ticker: str, name: Optional[str] = None, days: int = 260, forc
     )
     quote_label = "broker_realtime" if broker_realtime_enabled else "public_current_quote"
     quote_wording = "\uc2e4\uc2dc\uac04 \ud604\uc7ac\uac00" if broker_realtime_enabled else "\uacf5\uac1c \ud604\uc7ac\uac00"
-
-    kiwoom_rest_quote = market_data.fetch_kiwoom_rest_quote(ticker)
-    if kiwoom_rest_quote.get("ok"):
-        quote_price = round(float(kiwoom_rest_quote["price"]), 4)
-        quote_source = kiwoom_rest_quote.get("source", "kiwoom_rest")
-        quote_url = kiwoom_rest_quote.get("url")
-        public_quote = {"ok": True, "provider": quote_source, "price": quote_price, "url": quote_url}
 
     message = (
         f"{display_name}({ticker}) {quote_wording}: {quote_price:,.0f}\uc6d0\n"

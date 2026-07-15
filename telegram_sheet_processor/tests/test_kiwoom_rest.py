@@ -94,6 +94,61 @@ class KiwoomRestTests(unittest.TestCase):
         self.assertEqual(mock_post.call_args_list[0].kwargs["headers"]["api-id"], "au10001")
         self.assertEqual(mock_post.call_args_list[1].kwargs["headers"]["api-id"], "ka10001")
 
+    @patch("market_data.fetch_naver_public_quote")
+    @patch("market_data.fetch_kiwoom_rest_quote")
+    def test_best_current_quote_prefers_kiwoom_over_naver(self, mock_kiwoom, mock_naver):
+        mock_kiwoom.return_value = {
+            "ok": True,
+            "source": "kiwoom_rest_ka10001",
+            "ticker": "005930",
+            "price": 91700,
+            "url": "https://api.kiwoom.com/api/dostk/stkinfo",
+        }
+
+        result = market_data.fetch_best_current_quote("005930")
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["provider"], "kiwoom_rest_ka10001")
+        self.assertEqual(result["price"], 91700)
+        self.assertEqual(result["priority"], "broker_kiwoom_rest")
+        mock_naver.assert_not_called()
+
+    @patch("market_data.fetch_ohlcv")
+    @patch("market_data.cross_validate_ohlcv")
+    @patch("market_data.fetch_best_current_quote")
+    def test_verify_price_claims_uses_best_current_quote(self, mock_quote, mock_validate, mock_fetch):
+        import pandas as pd
+
+        frame = pd.DataFrame(
+            [{"date": "2026-07-15", "open": 90000, "high": 92000, "low": 89000, "close": 90000, "volume": 1000}]
+        )
+        mock_fetch.return_value = market_data.FetchResult(
+            ticker="005930",
+            name="삼성전자",
+            provider="pykrx",
+            rows=len(frame),
+            frame=frame,
+            cache_path=None,
+            warnings=[],
+        )
+        mock_validate.return_value = {"tradable": True, "checks": []}
+        mock_quote.return_value = {
+            "ok": True,
+            "provider": "kiwoom_rest_ka10001",
+            "price": 91700,
+            "url": "https://api.kiwoom.com/api/dostk/stkinfo",
+        }
+
+        result = market_data.verify_price_claims(
+            [{"ticker": "005930", "name": "삼성전자", "claimed_price": 91700}],
+            force=True,
+        )
+
+        row = result["results"][0]
+        self.assertEqual(row["verified_price"], 91700)
+        self.assertEqual(row["verified_price_source"], "kiwoom_rest_ka10001")
+        self.assertEqual(row["claim_status"], "matched")
+
 
 if __name__ == "__main__":
     unittest.main()
