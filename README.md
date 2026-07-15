@@ -12,6 +12,16 @@
 2. 필요한 패키지 설치
 3. 스크립트 실행
 
+## Preview / Review Lab
+- 홈서버에서 과거 차트 기반 매수/매도/관망 신호를 검증하는 화면을 제공합니다.
+- 기존 stock-api 포트 안에서 동작하므로 별도 포트가 필요하지 않습니다.
+- 상세 내용은 `telegram_sheet_processor/PREVIEW_REVIEW_LAB.md`를 참고하세요.
+
+접속 예:
+```text
+https://asset.jongchul-server.duckdns.org/review-ui
+```
+
 ## 초기화
 - `git init`
 - `.gitignore` 추가

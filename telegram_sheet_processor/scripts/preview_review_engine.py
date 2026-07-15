@@ -13,7 +13,10 @@ import pandas as pd
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
-import market_data
+try:
+    from . import market_data
+except ImportError:
+    import market_data
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -213,6 +216,56 @@ def review_outcomes(rows, lookahead_days=10):
     return outcomes
 
 
+def signal_probability(outcomes):
+    stats = {}
+    for outcome in outcomes:
+        signal = outcome["signal"]
+        bucket = stats.setdefault(
+            signal,
+            {
+                "count": 0,
+                "positive_end_count": 0,
+                "avg_end_return_pct": 0.0,
+                "avg_max_gain_pct": 0.0,
+                "avg_max_loss_pct": 0.0,
+                "positive_end_probability_pct": None,
+            },
+        )
+        bucket["count"] += 1
+        bucket["positive_end_count"] += 1 if outcome["end_return_pct"] > 0 else 0
+        bucket["avg_end_return_pct"] += outcome["end_return_pct"]
+        bucket["avg_max_gain_pct"] += outcome["max_gain_pct"]
+        bucket["avg_max_loss_pct"] += outcome["max_loss_pct"]
+
+    for bucket in stats.values():
+        count = bucket["count"]
+        if not count:
+            continue
+        bucket["avg_end_return_pct"] = round(bucket["avg_end_return_pct"] / count, 2)
+        bucket["avg_max_gain_pct"] = round(bucket["avg_max_gain_pct"] / count, 2)
+        bucket["avg_max_loss_pct"] = round(bucket["avg_max_loss_pct"] / count, 2)
+        bucket["positive_end_probability_pct"] = round(
+            (bucket["positive_end_count"] / count) * 100,
+            2,
+        )
+    return stats
+
+
+def build_decision_summary(result):
+    stats = result.get("probability_10d", {})
+    buy = stats.get("BUY", {})
+    prepare = stats.get("PREPARE", {})
+    return {
+        "primary_signal": "BUY" if buy.get("count", 0) else "PREPARE" if prepare.get("count", 0) else "HOLD",
+        "buy_positive_probability_10d_pct": buy.get("positive_end_probability_pct"),
+        "prepare_positive_probability_10d_pct": prepare.get("positive_end_probability_pct"),
+        "note": (
+            "Daily preview/review only. Do not use this as a 30-minute auto-order trigger "
+            "until Kiwoom REST intraday data is connected."
+        ),
+    }
+
+
 def run(ticker, name="", days=260, force=False):
     fetch = market_data.fetch_ohlcv(ticker, name or ticker, days=days, force=force)
     frame = add_stochastic(fetch.frame)
@@ -232,6 +285,8 @@ def run(ticker, name="", days=260, force=False):
         "chart_path": str(chart_path),
         "signals": rows,
     }
+    result["probability_10d"] = signal_probability(result["outcomes_10d"])
+    result["decision_summary"] = build_decision_summary(result)
     json_path.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
     result["json_path"] = str(json_path)
     return result

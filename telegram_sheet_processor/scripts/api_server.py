@@ -12,13 +12,15 @@ from typing import Any, Optional
 
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from pydantic import AliasChoices, BaseModel, Field
 
 try:
     from . import market_data
+    from . import preview_review_engine
 except ImportError:
     import market_data
+    import preview_review_engine
 
 APP_VERSION = "0.1.0"
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -123,6 +125,23 @@ class QuoteRequest(BaseModel):
     name: Optional[str] = Field(default=None, description="Human-readable stock name")
     days: int = Field(default=260, ge=60, le=1200)
     force: bool = Field(default=False, description="Fetch live data even if cache is fresh")
+
+
+class PreviewReviewRequest(BaseModel):
+    ticker: str = Field(
+        ...,
+        validation_alias=AliasChoices("ticker", "symbol"),
+        description="Korean stock code, for example 080220.",
+    )
+    name: Optional[str] = Field(default=None, description="Human-readable stock name")
+    days: int = Field(default=260, ge=60, le=1200)
+    force: bool = Field(default=False, description="Fetch live data even if cache is fresh")
+
+
+class PreviewReviewBatchRequest(BaseModel):
+    items: list[PreviewReviewRequest]
+    days: int = Field(default=260, ge=60, le=1200)
+    force: bool = False
 
 
 def now_utc() -> str:
@@ -570,6 +589,210 @@ def on_device_ai(request: ThemeRequest) -> dict[str, Any]:
         "validation_policy": f"decision is DATA_MISMATCH and tradable=false when close diff exceeds {market_data.MAX_CLOSE_DIFF_PCT}% or source date diff exceeds {market_data.MAX_SOURCE_DATE_DIFF_DAYS} day.",
         "max_data_age_days": market_data.MAX_DATA_AGE_DAYS,
     })
+
+
+def compact_preview_review(result: dict[str, Any]) -> dict[str, Any]:
+    ticker = str(result.get("ticker", ""))
+    chart_url = f"/preview-review/chart/{ticker}" if ticker else None
+    return {
+        **result,
+        "chart_url": chart_url,
+        "policy": {
+            "initial_order_budget_krw": preview_review_engine.INITIAL_ORDER_BUDGET_KRW,
+            "watchlist_limit": 50,
+            "stage": "daily_preview_review_before_kiwoom_intraday",
+            "order_policy": "Review only. Do not auto-order from daily review signals.",
+        },
+    }
+
+
+@app.post("/preview-review")
+def preview_review(request: PreviewReviewRequest) -> dict[str, Any]:
+    try:
+        name = request.name or market_data.lookup_pykrx_name(request.ticker) or request.ticker
+        result = preview_review_engine.run(
+            request.ticker.strip(),
+            name=name,
+            days=request.days,
+            force=request.force,
+        )
+        return api_success({"review": compact_preview_review(result)})
+    except Exception as exc:
+        return api_error(exc, {"ticker": request.ticker, "name": request.name})
+
+
+@app.post("/preview-review-batch")
+def preview_review_batch(request: PreviewReviewBatchRequest) -> dict[str, Any]:
+    results = []
+    errors = []
+    for item in request.items[:50]:
+        effective = item.copy(update={
+            "days": request.days,
+            "force": item.force or request.force,
+        })
+        try:
+            name = effective.name or market_data.lookup_pykrx_name(effective.ticker) or effective.ticker
+            result = preview_review_engine.run(
+                effective.ticker.strip(),
+                name=name,
+                days=effective.days,
+                force=effective.force,
+            )
+            results.append(compact_preview_review(result))
+        except Exception as exc:
+            errors.append({
+                "ticker": item.ticker,
+                "name": item.name,
+                "error": str(exc),
+            })
+    return api_success({
+        "count": len(results),
+        "error_count": len(errors),
+        "max_items": 50,
+        "results": results,
+        "errors": errors,
+        "policy": "Batch review is capped at 50 symbols to match the watchlist limit.",
+    })
+
+
+@app.get("/preview-review/chart/{ticker}")
+def preview_review_chart(ticker: str):
+    safe_ticker = "".join(ch for ch in ticker if ch.isalnum())
+    path = preview_review_engine.OUTPUT_DIR / f"{safe_ticker}_preview_review.html"
+    if not path.exists():
+        return JSONResponse(
+            status_code=404,
+            content=api_error(FileNotFoundError(path), {
+                "ticker": safe_ticker,
+                "hint": "Run POST /preview-review first.",
+            }),
+        )
+    return FileResponse(path, media_type="text/html")
+
+
+@app.get("/review-ui", response_class=HTMLResponse)
+def review_ui() -> str:
+    return """
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Preview / Review Lab</title>
+  <style>
+    :root { color-scheme: light; --bg:#f7f8fb; --panel:#fff; --ink:#172033; --muted:#657084; --line:#d9dfeb; --accent:#2563eb; --good:#138a45; --warn:#b7791f; --bad:#c53030; }
+    body { margin:0; font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background:var(--bg); color:var(--ink); }
+    header { padding:20px 24px; border-bottom:1px solid var(--line); background:#fff; position:sticky; top:0; z-index:2; }
+    h1 { margin:0 0 6px; font-size:22px; }
+    p { margin:0; color:var(--muted); }
+    main { display:grid; grid-template-columns: 360px 1fr; gap:16px; padding:16px; }
+    section { background:var(--panel); border:1px solid var(--line); border-radius:8px; padding:14px; }
+    label { display:block; font-size:13px; color:var(--muted); margin:12px 0 6px; }
+    input, select, button { width:100%; box-sizing:border-box; border:1px solid var(--line); border-radius:6px; padding:10px; font-size:15px; }
+    button { background:var(--accent); color:white; border:0; font-weight:700; cursor:pointer; margin-top:14px; }
+    button:disabled { opacity:.6; cursor:wait; }
+    .cards { display:grid; grid-template-columns: repeat(4, minmax(120px,1fr)); gap:10px; margin:12px 0; }
+    .card { border:1px solid var(--line); border-radius:8px; padding:10px; background:#fbfcff; }
+    .card b { display:block; font-size:18px; }
+    .good { color:var(--good); } .warn { color:var(--warn); } .bad { color:var(--bad); }
+    iframe { width:100%; height:760px; border:1px solid var(--line); border-radius:8px; background:white; }
+    pre { white-space:pre-wrap; word-break:break-word; background:#0f172a; color:#e5e7eb; padding:12px; border-radius:8px; max-height:320px; overflow:auto; }
+    table { width:100%; border-collapse:collapse; font-size:13px; }
+    th, td { border-bottom:1px solid var(--line); padding:7px; text-align:right; }
+    th:first-child, td:first-child { text-align:left; }
+    @media (max-width: 980px) { main { grid-template-columns:1fr; } iframe { height:560px; } }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Preview / Review Lab</h1>
+    <p>과거 차트 위에 준비, 매수, 축소, 회피 신호를 표시하고 10거래일 후 확률을 점검합니다. 현재 버전은 일봉 예습/복습용입니다.</p>
+  </header>
+  <main>
+    <section>
+      <h2>검증 실행</h2>
+      <label>종목코드</label>
+      <input id="ticker" value="080220" placeholder="예: 080220" />
+      <label>종목명</label>
+      <input id="name" value="제주반도체" placeholder="예: 제주반도체" />
+      <label>기간</label>
+      <select id="days">
+        <option value="120">최근 3~4개월</option>
+        <option value="260" selected>최근 1년 내외</option>
+        <option value="520">최근 2년 내외</option>
+        <option value="780">최근 3년 내외</option>
+      </select>
+      <label><input id="force" type="checkbox" style="width:auto" /> 캐시 무시하고 재조회</label>
+      <button id="run">리뷰 생성</button>
+      <div class="cards">
+        <div class="card"><span>BUY 확률</span><b id="buyProb">-</b></div>
+        <div class="card"><span>PREPARE 확률</span><b id="prepareProb">-</b></div>
+        <div class="card"><span>BUY 횟수</span><b id="buyCount">-</b></div>
+        <div class="card"><span>자동주문 기준</span><b>10만원</b></div>
+      </div>
+      <h3>확률/성과 요약</h3>
+      <div id="stats"></div>
+      <h3>상태</h3>
+      <pre id="status">대기 중</pre>
+    </section>
+    <section>
+      <h2>차트 리뷰</h2>
+      <iframe id="chart" title="preview review chart"></iframe>
+    </section>
+  </main>
+  <script>
+    const $ = (id) => document.getElementById(id);
+    const fmt = (value) => value === null || value === undefined ? "-" : value;
+    function renderStats(stats) {
+      const keys = Object.keys(stats || {});
+      if (!keys.length) return "<p>신호 통계가 아직 없습니다.</p>";
+      return `<table><thead><tr><th>신호</th><th>횟수</th><th>양수확률</th><th>평균수익</th><th>평균최대상승</th><th>평균최대하락</th></tr></thead><tbody>${keys.map(k => {
+        const s = stats[k];
+        return `<tr><td>${k}</td><td>${fmt(s.count)}</td><td>${fmt(s.positive_end_probability_pct)}%</td><td>${fmt(s.avg_end_return_pct)}%</td><td>${fmt(s.avg_max_gain_pct)}%</td><td>${fmt(s.avg_max_loss_pct)}%</td></tr>`;
+      }).join("")}</tbody></table>`;
+    }
+    $("run").addEventListener("click", async () => {
+      $("run").disabled = true;
+      $("status").textContent = "실행 중입니다. 데이터 재조회는 시간이 걸릴 수 있습니다.";
+      try {
+        const response = await fetch("/preview-review", {
+          method: "POST",
+          headers: {"Content-Type": "application/json"},
+          body: JSON.stringify({
+            ticker: $("ticker").value.trim(),
+            name: $("name").value.trim(),
+            days: Number($("days").value),
+            force: $("force").checked
+          })
+        });
+        const data = await response.json();
+        if (!data.ok) throw new Error(data.error || "unknown error");
+        const review = data.review;
+        const probs = review.probability_10d || {};
+        $("buyProb").textContent = fmt(probs.BUY && probs.BUY.positive_end_probability_pct) + "%";
+        $("prepareProb").textContent = fmt(probs.PREPARE && probs.PREPARE.positive_end_probability_pct) + "%";
+        $("buyCount").textContent = fmt(probs.BUY && probs.BUY.count);
+        $("stats").innerHTML = renderStats(probs);
+        $("chart").src = review.chart_url + "?t=" + Date.now();
+        $("status").textContent = JSON.stringify({
+          ticker: review.ticker,
+          name: review.name,
+          provider: review.provider,
+          rows: review.rows,
+          summary: review.summary,
+          decision_summary: review.decision_summary,
+          chart_url: review.chart_url
+        }, null, 2);
+      } catch (error) {
+        $("status").textContent = "오류: " + error.message;
+      } finally {
+        $("run").disabled = false;
+      }
+    });
+  </script>
+</body>
+</html>
+"""
 
 
 @app.post("/verify-prices")

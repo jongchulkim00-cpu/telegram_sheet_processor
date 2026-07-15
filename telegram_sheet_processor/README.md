@@ -20,6 +20,29 @@ pip install -r requirements.txt
 python scripts/market_data.py --watchlist data/watchlist.json --days 260 --force
 ```
 
+## Preview / Review Lab
+
+자동매매 조건을 바로 실전에 쓰기 전에 과거 차트로 예습/복습하는 검증 화면입니다.
+
+- 기존 stock-api 8010 서비스 안에서 동작합니다.
+- 별도 포트가 필요하지 않습니다.
+- 단일 종목 및 50개 이하 배치 리뷰를 지원합니다.
+- BUY/PREPARE/REDUCE/AVOID 신호를 차트 위에 표시합니다.
+- 각 신호 이후 10거래일 기준 양수 확률, 평균 수익, 평균 최대 상승/하락을 계산합니다.
+- 현재 버전은 일봉 기반이며, Kiwoom REST 30분봉 데이터 연결 후 실제 진입 타이밍 검증으로 확장합니다.
+
+브라우저 접속:
+```text
+https://asset.jongchul-server.duckdns.org/review-ui
+```
+
+내부망 접속:
+```text
+http://192.168.1.12:8010/review-ui
+```
+
+자세한 내용은 `PREVIEW_REVIEW_LAB.md`를 참고하세요.
+
 ## n8n / MCP HTTP API
 기존 CLI 분석 엔진은 유지하면서, n8n의 HTTP Request 노드가 호출할 수 있는 API 서버를 추가했습니다.
 
