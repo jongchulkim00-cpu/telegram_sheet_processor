@@ -965,13 +965,15 @@ def quote_payload(ticker: str, name: Optional[str] = None, days: int = 260, forc
         quote_source = fetch.provider
         quote_url = None
 
-    realtime = market_data.realtime_source_status()
-    kiwoom = market_data.kiwoom_source_status()
-    kiwoom_rest = market_data.kiwoom_rest_source_status()
+    quote_priority = str(public_quote.get("priority") or "").lower()
+    quote_provider = str(public_quote.get("provider") or quote_source or "").lower()
     broker_realtime_enabled = bool(
-        realtime.get("allows_current_price_wording")
-        or kiwoom.get("allows_current_price_wording")
-        or kiwoom_rest.get("allows_current_price_wording")
+        public_quote.get("ok")
+        and (
+            quote_priority == "broker_kiwoom_rest"
+            or "kiwoom" in quote_provider
+            or "kis" in quote_provider
+        )
     )
     quote_label = "broker_realtime" if broker_realtime_enabled else "public_current_quote"
     quote_wording = "\uc2e4\uc2dc\uac04 \ud604\uc7ac\uac00" if broker_realtime_enabled else "\uacf5\uac1c \ud604\uc7ac\uac00"
@@ -1004,7 +1006,7 @@ def quote_payload(ticker: str, name: Optional[str] = None, days: int = 260, forc
         "tradable": bool(meta.get("tradable")) and bool(validation.get("tradable", True)),
         "validation": validation,
         "message": message,
-        "policy": "Do not label this as broker-grade realtime unless broker_realtime_enabled=true.",
+        "policy": "Do not label this as broker-grade realtime unless the returned quote itself came from a broker realtime provider.",
     }
 
 

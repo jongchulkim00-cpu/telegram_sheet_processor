@@ -1,6 +1,7 @@
 import unittest
 import sys
 from pathlib import Path
+from unittest.mock import patch
 import pandas as pd
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -171,6 +172,48 @@ class PreviewReviewApiTests(unittest.TestCase):
         self.assertIn("outputs", status["storage"])
         self.assertIn("STOCK_DATA_DIR", status["docker_volume_policy"]["data_mount"])
         self.assertIn("intraday_30m", status["retention_policy"])
+
+    def test_quote_payload_labels_naver_fallback_as_public_quote(self):
+        frame = pd.DataFrame({
+            "date": ["2026-07-15"],
+            "open": [89100],
+            "high": [89100],
+            "low": [89100],
+            "close": [89100],
+            "volume": [1000],
+        })
+        fetch = api_server.market_data.FetchResult(
+            ticker="080220",
+            name="제주반도체",
+            provider="cache",
+            rows=1,
+            cache_path=Path("dummy.csv"),
+            warnings=[],
+            frame=frame,
+        )
+
+        with patch.object(api_server.market_data, "fetch_ohlcv", return_value=fetch), \
+            patch.object(api_server.market_data, "cross_validate_ohlcv", return_value={"tradable": True}), \
+            patch.object(api_server.market_data, "latest_data_meta", return_value={
+                "data_as_of": "2026-07-15",
+                "data_age_days": 1,
+                "freshness_status": "fresh",
+                "tradable": True,
+            }), \
+            patch.object(api_server.market_data, "lookup_pykrx_name", return_value="제주반도체"), \
+            patch.object(api_server.market_data, "fetch_best_current_quote", return_value={
+                "ok": True,
+                "provider": "naver_finance_public",
+                "price": 89100,
+                "url": "https://finance.naver.com/item/main.naver?code=080220",
+                "priority": "public_naver",
+                "kiwoom_rest_error": "timeout",
+            }):
+            quote = api_server.quote_payload("080220", name="제주반도체", days=120, force=False)
+
+        self.assertEqual(quote["quote_label"], "public_current_quote")
+        self.assertFalse(quote["broker_realtime_enabled"])
+        self.assertIn("공개 현재가", quote["message"])
 
 
 if __name__ == "__main__":
