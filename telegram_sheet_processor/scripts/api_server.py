@@ -871,6 +871,25 @@ def review_ui() -> str:
       $("stockSearch").value = `${item.name} (${item.ticker})`;
       $("suggestions").style.display = "none";
     }
+    async function autoFillStockFrom(field) {
+      const raw = field === "ticker" ? $("ticker").value : $("name").value;
+      const query = raw.trim();
+      if (!query) return;
+      try {
+        const response = await fetch(`/stocks/search?q=${encodeURIComponent(query)}&limit=8`);
+        const data = await response.json();
+        const results = data.results || [];
+        if (!data.ok || !results.length) return;
+        const exact = results.find((item) => item.ticker === query || item.name === query);
+        const prefix = field === "ticker"
+          ? results.find((item) => item.ticker.startsWith(query))
+          : results.find((item) => item.name.startsWith(query));
+        const chosen = exact || prefix || results[0];
+        if (chosen) selectStock(chosen);
+      } catch (_error) {
+        // Keep manual input if lookup fails.
+      }
+    }
     async function searchStocks(query) {
       query = query.trim();
       if (query.length < 1) {
@@ -905,6 +924,10 @@ def review_ui() -> str:
       if (!row || !row.dataset.ticker) return;
       selectStock({ticker: row.dataset.ticker, name: row.dataset.name, market: ""});
     });
+    $("ticker").addEventListener("change", () => autoFillStockFrom("ticker"));
+    $("ticker").addEventListener("blur", () => autoFillStockFrom("ticker"));
+    $("name").addEventListener("change", () => autoFillStockFrom("name"));
+    $("name").addEventListener("blur", () => autoFillStockFrom("name"));
     document.addEventListener("click", (event) => {
       if (!event.target.closest(".search-wrap")) $("suggestions").style.display = "none";
     });

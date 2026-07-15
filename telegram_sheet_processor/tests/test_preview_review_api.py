@@ -16,6 +16,7 @@ class PreviewReviewApiTests(unittest.TestCase):
         self.assertIn("/preview-review", html)
         self.assertIn("/stocks/search", html)
         self.assertIn("stockSearch", html)
+        self.assertIn("autoFillStockFrom", html)
         self.assertIn("ticker", html)
         self.assertIn("BUY", html)
         self.assertIn("PREPARE", html)
