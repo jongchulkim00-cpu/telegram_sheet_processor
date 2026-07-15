@@ -87,6 +87,8 @@ https://asset.jongchul-server.duckdns.org
 - `mcp-news-crawler`, `mcp-media-transcriber`는 보조 컨텍스트로만 사용
 - 뉴스는 촉매제와 리스크 설명에만 사용
 - 뉴스로 현재가, RSI, MACD, 목표가, 손절가를 만들지 않는다
+- 뉴스/공시/센티먼트는 가능하면 URL을 함께 제시한다.
+- URL이 없으면 해당 컨텍스트를 "출처 미검증"으로 낮춰 표기하되, 가격/날짜/기술지표가 검증되었다면 이것만으로 전송을 차단하지 않는다.
 
 거시경제:
 
@@ -256,13 +258,14 @@ https://asset.jongchul-server.duckdns.org
 ### 7. 검증 상태
 - publishable: {{publishable}}
 - 차단 사유: {{blocking_reasons}}
+- 경고: {{non_blocking_warnings}}
 ```
 
 ## 9. 차단 조건
 
 아래 중 하나라도 해당하면 Telegram 전송 금지:
 
-1. `/validate-report`의 `publishable=false`
+1. `/validate-report`의 `publishable=false`이고, 사유가 가격/날짜/데이터 신선도/전략값 검증 실패인 경우
 2. 보고서 기준일이 API `analysis_date`와 다름
 3. 보고서 가격과 검증 가격 차이가 허용 범위를 초과함
 4. `freshness_status != fresh`
@@ -270,10 +273,16 @@ https://asset.jongchul-server.duckdns.org
 6. KIS/Kiwoom 미설정 상태에서 "실시간 현재가" 표현 사용
 7. API 호출 없이 AI가 가격/전략값을 생성함
 
+전송 차단이 아닌 경고 조건:
+
+- 뉴스/공시/센티먼트 주장에 URL이 없는 경우
+- 거시경제/섹터 컨텍스트가 정성적이고 가격/기술지표 생성에 사용되지 않은 경우
+- 위 경우에는 `non_blocking_warnings` 또는 "출처 미검증"으로 표기하고, 가격/날짜/기술지표 검증이 통과하면 보고서는 전송 가능하다.
+
 ## 10. 실패 응답 형식
 
 ```text
-가격/날짜 검증 실패로 텔레그램 전송을 차단했습니다.
+{{검증 유형}}로 텔레그램 전송을 차단했습니다.
 
 사유:
 - {{blocking_reason_1}}

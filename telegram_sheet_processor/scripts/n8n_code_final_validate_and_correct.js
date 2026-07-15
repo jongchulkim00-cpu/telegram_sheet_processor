@@ -126,9 +126,30 @@ function isAvoidanceResponse(text) {
   return /(?:\uC885\uBAA9\uBCC4\s*\uC815\uBC00\s*\uBD84\uC11D\uC5D0\s*\uCD5C\uC801\uD654|\uC2A4\uD06C\uB9AC\uB2DD\uD558\uC5EC\s*\uB9AC\uC2A4\uD2B8\uC5C5\uD558\uB294\s*\uAE30\uB2A5\uC740\s*\uC81C\uD55C|\uAD00\uC2EC\uC744\s*\uAC00\uC9C0\uC2DC\uB294\s*\uC139\uD130|\uD2B9\uC815\s*\uC885\uBAA9.*\uB9D0\uC500|\uB9D0\uC500\uD574\uC8FC\uC2DC\uBA74.*\uBD84\uC11D|\uC2EC\uCE35\s*\uBD84\uC11D\uC744\s*\uC2DC\uC791)/i.test(text);
 }
 
-function buildReasonLines(validation, localReasons) {
+function isNonBlockingReason(reason) {
+  const text = String(reason || "");
+  return (
+    /News\/disclosure\/sentiment claims exist without source URLs/i.test(text) ||
+    /source URLs.*unverified/i.test(text) ||
+    /뉴스|공시|센티먼트|근거\s*URL|출처\s*URL/i.test(text) && /없|미확인|미검증|unverified/i.test(text)
+  );
+}
+
+function buildReasonState(validation, localReasons) {
   const apiReasons = Array.isArray(validation?.blocking_reasons) ? validation.blocking_reasons : [];
-  return [...localReasons, ...apiReasons].filter(Boolean).slice(0, 12);
+  const warningFields = [
+    ...(Array.isArray(validation?.non_blocking_warnings) ? validation.non_blocking_warnings : []),
+    ...(Array.isArray(validation?.evidence_warnings) ? validation.evidence_warnings : []),
+  ];
+  const allReasons = [...localReasons, ...apiReasons].filter(Boolean);
+  const blocking = allReasons.filter((reason) => !isNonBlockingReason(reason)).slice(0, 12);
+  const warnings = [...allReasons.filter(isNonBlockingReason), ...warningFields].filter(Boolean).slice(0, 12);
+  const apiHadOnlyNonBlockingReasons = apiReasons.length > 0 && apiReasons.every(isNonBlockingReason);
+  return {
+    blocking,
+    warnings,
+    apiHadOnlyNonBlockingReasons,
+  };
 }
 
 function classifyBlockReason(reasons) {
@@ -310,8 +331,14 @@ return await (async () => {
       timeout: 120000,
     });
 
-    const reasons = buildReasonLines(validation, localReasons);
-    const blocked = !validation?.ok || validation.publishable === false || reasons.length > 0;
+    const reasonState = buildReasonState(validation, localReasons);
+    const reasons = reasonState.blocking;
+    const legacyEvidenceOnlyBlock =
+      validation?.publishable === false &&
+      reasonState.apiHadOnlyNonBlockingReasons &&
+      reasons.length === 0 &&
+      localReasons.length === 0;
+    const blocked = !validation?.ok || reasons.length > 0 || (validation.publishable === false && !legacyEvidenceOnlyBlock);
 
     if (blocked) {
       let blockedTickers = extractBlockedTickers(validation, ticker);
@@ -329,6 +356,7 @@ return await (async () => {
           can_insert_db: false,
           report_publishable: false,
           validation,
+          non_blocking_warnings: reasonState.warnings,
           blocked_tickers: blockedTickers,
           quotes,
           original_report: cleanMessage,
@@ -344,6 +372,7 @@ return await (async () => {
         can_send_telegram: true,
         can_insert_db: !["N/A", "INFO", "BLOCKED", "ERR"].includes(String(dbData.symbol || "")),
         report_publishable: true,
+        non_blocking_warnings: reasonState.warnings,
         validation,
       },
     }];
