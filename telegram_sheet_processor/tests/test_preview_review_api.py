@@ -14,6 +14,8 @@ class PreviewReviewApiTests(unittest.TestCase):
         html = api_server.review_ui()
 
         self.assertIn("Preview / Review Lab", html)
+        self.assertIn("@tabler/core", html)
+        self.assertIn('data-ui-version="tabler"', html)
         self.assertIn("/preview-review", html)
         self.assertIn("/stocks/search", html)
         self.assertIn("autoFillStockFrom", html)

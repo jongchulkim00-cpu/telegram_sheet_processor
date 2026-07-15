@@ -1311,8 +1311,253 @@ def preview_review_chart(ticker: str):
     return FileResponse(path, media_type="text/html")
 
 
+def review_ui_tabler() -> str:
+    return """
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Preview / Review Lab</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/core@1.4.0/dist/css/tabler.min.css">
+  <style>
+    .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace; }
+    .review-frame { width:100%; min-height:760px; border:1px solid var(--tblr-border-color); border-radius: var(--tblr-border-radius-lg); background:#fff; }
+    textarea.form-control { min-height: 132px; }
+    pre.status-box { min-height: 76px; white-space: pre-wrap; }
+  </style>
+</head>
+<body data-ui-version="tabler">
+  <div class="page">
+    <header class="navbar navbar-expand-md d-print-none">
+      <div class="container-xl">
+        <div>
+          <h1 class="navbar-brand navbar-brand-autodark mb-0">Preview / Review Lab</h1>
+          <div class="text-secondary">과거 차트 위에 준비, 매수, 축소, 회피 신호를 표시하고 10거래일 후 확률을 점검합니다.</div>
+        </div>
+      </div>
+    </header>
+    <div class="page-wrapper">
+      <div class="page-body">
+        <div class="container-xl">
+          <div class="row row-cards">
+            <div class="col-12">
+              <div class="card">
+                <div class="card-header"><h2 class="card-title">검증 실행</h2></div>
+                <div class="card-body">
+                  <div class="row g-3">
+                    <div class="col-md-6">
+                      <label class="form-label" for="name">종목명</label>
+                      <input id="name" class="form-control" value="제주반도체" placeholder="예: 한미반도체, 제주반도체" autocomplete="off" />
+                      <div class="form-hint">종목명을 입력하고 Enter를 누르면 종목코드가 자동 입력됩니다.</div>
+                    </div>
+                    <div class="col-md-3">
+                      <label class="form-label" for="ticker">종목코드</label>
+                      <input id="ticker" class="form-control mono" value="080220" placeholder="예: 080220" autocomplete="off" />
+                    </div>
+                    <div class="col-md-3">
+                      <label class="form-label" for="days">기간</label>
+                      <select id="days" class="form-select">
+                        <option value="90">최근 3개월 내외</option>
+                        <option value="180">최근 6개월 내외</option>
+                        <option value="365" selected>최근 1년 내외</option>
+                        <option value="730">최근 2년 내외</option>
+                      </select>
+                    </div>
+                  </div>
+                  <label class="form-check mt-3">
+                    <input id="force" class="form-check-input" type="checkbox" />
+                    <span class="form-check-label">캐시 무시하고 재조회</span>
+                  </label>
+                  <button id="run" class="btn btn-primary w-100 mt-3" type="button">리뷰 생성</button>
+                </div>
+              </div>
+            </div>
+            <div class="col-sm-6 col-lg-3"><div class="card card-sm"><div class="card-body"><div class="text-secondary">BUY 확률</div><div id="buyProb" class="h1 mb-0">-</div></div></div></div>
+            <div class="col-sm-6 col-lg-3"><div class="card card-sm"><div class="card-body"><div class="text-secondary">PREPARE 확률</div><div id="prepareProb" class="h1 mb-0">-</div></div></div></div>
+            <div class="col-sm-6 col-lg-3"><div class="card card-sm"><div class="card-body"><div class="text-secondary">BUY 횟수</div><div id="buyCount" class="h1 mb-0">-</div></div></div></div>
+            <div class="col-sm-6 col-lg-3"><div class="card card-sm"><div class="card-body"><div class="text-secondary">자동주문 기준</div><div class="h1 mb-0">10만원</div></div></div></div>
+            <div class="col-12">
+              <div class="card">
+                <div class="card-header"><h2 class="card-title">확률/성과 요약</h2></div>
+                <div class="card-body">
+                  <div id="stats" class="table-responsive"></div>
+                  <h3 class="card-title mt-4">상태</h3>
+                  <pre id="status" class="status-box bg-dark text-white rounded p-3">대기 중</pre>
+                </div>
+              </div>
+            </div>
+            <div class="col-12">
+              <div class="card">
+                <div class="card-header"><h2 class="card-title">차트</h2></div>
+                <div class="card-body"><iframe id="chart" class="review-frame" title="preview review chart"></iframe></div>
+              </div>
+            </div>
+            <div class="col-lg-6">
+              <div class="card">
+                <div class="card-header"><h2 class="card-title">관찰 종목 / 배치 검증</h2></div>
+                <div class="card-body">
+                  <label class="form-label" for="batchItems">관찰 종목 목록</label>
+                  <textarea id="batchItems" class="form-control" placeholder="080220 제주반도체&#10;042700 한미반도체"></textarea>
+                  <div class="btn-list mt-3">
+                    <button id="addCurrent" class="btn btn-outline-primary" type="button">현재 종목 추가</button>
+                    <button id="loadWatchlist" class="btn btn-outline-secondary" type="button">목록 불러오기</button>
+                    <button id="saveWatchlist" class="btn btn-outline-secondary" type="button">목록 저장</button>
+                    <button id="runBatch" class="btn btn-primary" type="button">배치 검증</button>
+                  </div>
+                  <div id="batchResults" class="table-responsive mt-3"></div>
+                </div>
+              </div>
+            </div>
+            <div class="col-lg-6">
+              <div class="card">
+                <div class="card-header"><h2 class="card-title">섹터 / 상대강도</h2></div>
+                <div class="card-body">
+                  <button id="loadRelativeStrength" class="btn btn-primary" type="button">상대강도 점검</button>
+                  <h3 class="card-title mt-4">상대강도</h3>
+                  <div id="relativeStrengthDetail" class="table-responsive"></div>
+                  <h3 class="card-title mt-4">섹터 후보군</h3>
+                  <div id="sectorDetail" class="table-responsive"></div>
+                  <h3 class="card-title mt-4">전종목 검색 상태</h3>
+                  <pre id="universeStatus" class="status-box bg-dark text-white rounded p-3">확인 전</pre>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+  <script src="https://cdn.jsdelivr.net/npm/@tabler/core@1.4.0/dist/js/tabler.min.js"></script>
+  <script>
+    const $ = (id) => document.getElementById(id);
+    const fmt = (v) => (v === null || v === undefined || Number.isNaN(Number(v))) ? '-' : Number(v).toFixed(2);
+    function esc(v) { return String(v ?? '').replace(/[&<>"']/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+    function badge(signal) {
+      const map = { BUY:'bg-green-lt', PREPARE:'bg-yellow-lt', REDUCE:'bg-red-lt', AVOID:'bg-secondary-lt' };
+      return `<span class="badge ${map[signal] || 'bg-blue-lt'}">${esc(signal || '-')}</span>`;
+    }
+    function selectStock(stock) {
+      if (!stock) return;
+      if (stock.ticker) $('ticker').value = stock.ticker;
+      if (stock.name) $('name').value = stock.name;
+    }
+    async function resolveStockFromName() {
+      const q = $('name').value.trim();
+      if (!q || /^\\d{6}$/.test(q)) return null;
+      const res = await fetch('/stocks/search?q=' + encodeURIComponent(q) + '&limit=5');
+      const data = await res.json();
+      if (!data.results || !data.results.length) return null;
+      selectStock(data.results[0]);
+      return data.results[0];
+    }
+    async function autoFillStockFrom(field) {
+      if (field === 'name') return resolveStockFromName();
+      const code = $('ticker').value.trim();
+      if (!/^\\d{6}$/.test(code)) return null;
+      const res = await fetch('/stocks/search?q=' + encodeURIComponent(code) + '&limit=1');
+      const data = await res.json();
+      if (data.results && data.results.length) selectStock(data.results[0]);
+      return data.results?.[0] || null;
+    }
+    function renderStats(data) {
+      const stats = data.summary || {};
+      $('buyProb').textContent = stats.BUY ? fmt(stats.BUY.win_rate_pct) + '%' : '-';
+      $('prepareProb').textContent = stats.PREPARE ? fmt(stats.PREPARE.win_rate_pct) + '%' : '-';
+      $('buyCount').textContent = stats.BUY ? stats.BUY.count : '-';
+      const rows = Object.entries(stats).map(([sig, row]) => `<tr><td>${badge(sig)}</td><td>${row.count}</td><td>${fmt(row.win_rate_pct)}%</td><td>${fmt(row.avg_return_pct)}%</td><td>${fmt(row.max_drawdown_pct)}%</td></tr>`).join('');
+      $('stats').innerHTML = rows ? `<table class="table card-table table-vcenter"><thead><tr><th>신호</th><th>횟수</th><th>승률</th><th>평균 수익률</th><th>최대 낙폭</th></tr></thead><tbody>${rows}</tbody></table>` : '<div class="empty"><p class="empty-title">요약 데이터 없음</p></div>';
+    }
+    function parseBatchItems() {
+      return $('batchItems').value.split(/\\n+/).map(line => line.trim()).filter(Boolean).map(line => {
+        const m = line.match(/(\\d{6})\\s*(.*)/);
+        return m ? { ticker:m[1], name:m[2].trim() || m[1] } : null;
+      }).filter(Boolean).slice(0, 50);
+    }
+    function itemsToBatchText(items) { return (items || []).map(x => `${x.ticker} ${x.name || ''}`.trim()).join('\\n'); }
+    async function loadWatchlist() {
+      const res = await fetch('/review-watchlist');
+      const data = await res.json();
+      if (data.items) $('batchItems').value = itemsToBatchText(data.items);
+    }
+    async function saveWatchlist() {
+      const items = parseBatchItems();
+      const res = await fetch('/review-watchlist', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({items}) });
+      const data = await res.json();
+      $('status').textContent = data.ok ? `관찰 종목 ${data.count}개 저장` : JSON.stringify(data, null, 2);
+    }
+    function renderBatchResults(data) {
+      const rows = (data.results || []).map(r => `<tr><td class="mono">${esc(r.ticker)}</td><td>${esc(r.name)}</td><td>${badge(r.latest_signal)}</td><td>${fmt(r.buy_win_rate_pct)}%</td><td>${fmt(r.prepare_win_rate_pct)}%</td><td>${r.buy_count ?? '-'}</td><td>${esc(r.error || '')}</td></tr>`).join('');
+      $('batchResults').innerHTML = rows ? `<table class="table card-table table-vcenter"><thead><tr><th>코드</th><th>종목</th><th>최신 신호</th><th>BUY 승률</th><th>PREPARE 승률</th><th>BUY 횟수</th><th>오류</th></tr></thead><tbody>${rows}</tbody></table>` : '<div class="empty"><p class="empty-title">배치 결과 없음</p></div>';
+    }
+    async function loadSectorThemes() {
+      const res = await fetch('/review-sectors');
+      const data = await res.json();
+      const rows = (data.sectors || []).map(s => `<tr><td>${esc(s.sector)}</td><td>${esc((s.items || []).map(x => `${x.name}(${x.ticker})`).join(', '))}</td></tr>`).join('');
+      $('sectorDetail').innerHTML = rows ? `<table class="table card-table"><tbody>${rows}</tbody></table>` : '<div class="text-secondary">섹터 데이터 없음</div>';
+    }
+    async function loadRelativeStrength() {
+      const items = parseBatchItems();
+      const body = items.length ? {items} : {items:[{ticker:$('ticker').value.trim(), name:$('name').value.trim()}]};
+      const res = await fetch('/review-relative-strength', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body) });
+      const data = await res.json();
+      const rows = (data.results || []).map(r => `<tr><td class="mono">${esc(r.ticker)}</td><td>${esc(r.name)}</td><td>${esc(r.market || '-')}</td><td>${fmt(r.stock_return_pct)}%</td><td>${fmt(r.benchmark_return_pct)}%</td><td>${fmt(r.relative_strength_pct)}%</td><td>${esc(r.label || '-')}</td><td>${esc(r.error || '')}</td></tr>`).join('');
+      $('relativeStrengthDetail').innerHTML = rows ? `<table class="table card-table table-vcenter"><thead><tr><th>코드</th><th>종목</th><th>시장</th><th>종목</th><th>지수</th><th>초과</th><th>판정</th><th>오류</th></tr></thead><tbody>${rows}</tbody></table>` : '<div class="text-secondary">상대강도 결과 없음</div>';
+    }
+    async function loadUniverseStatus() {
+      const res = await fetch('/stocks/universe/status');
+      const data = await res.json();
+      $('universeStatus').textContent = JSON.stringify(data, null, 2);
+    }
+    $('name').addEventListener('keydown', async (e) => { if (e.key === 'Enter') { e.preventDefault(); await resolveStockFromName(); } });
+    $('ticker').addEventListener('keydown', async (e) => { if (e.key === 'Enter') { e.preventDefault(); await autoFillStockFrom('ticker'); } });
+    $('addCurrent').addEventListener('click', () => {
+      const current = `${$('ticker').value.trim()} ${$('name').value.trim()}`.trim();
+      if (!current) return;
+      const existing = $('batchItems').value.trim();
+      $('batchItems').value = existing ? existing + '\\n' + current : current;
+    });
+    $('loadWatchlist').addEventListener('click', loadWatchlist);
+    $('saveWatchlist').addEventListener('click', saveWatchlist);
+    $('runBatch').addEventListener('click', async () => {
+      const items = parseBatchItems();
+      $('status').textContent = `배치 검증 중: ${items.length}개`;
+      const res = await fetch('/preview-review-batch', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({items, days:Number($('days').value), force:$('force').checked}) });
+      const data = await res.json();
+      renderBatchResults(data);
+      $('status').textContent = JSON.stringify({ok:data.ok, count:data.count, error_count:data.error_count}, null, 2);
+    });
+    $('loadRelativeStrength').addEventListener('click', loadRelativeStrength);
+    $('run').addEventListener('click', async () => {
+      try {
+        $('status').textContent = '리뷰 생성 중...';
+        if (!$('ticker').value.trim() && $('name').value.trim()) await resolveStockFromName();
+        await autoFillStockFrom('ticker');
+        const ticker = $('ticker').value.trim();
+        if (!/^\\d{6}$/.test(ticker)) throw new Error('종목코드 6자리가 필요합니다.');
+        const body = { ticker, name:$('name').value.trim(), days:Number($('days').value), force:$('force').checked };
+        const res = await fetch('/preview-review', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body) });
+        const data = await res.json();
+        if (!data.ok) throw new Error(data.detail || data.error || '리뷰 생성 실패');
+        renderStats(data);
+        $('chart').src = data.chart_url || ('/preview-review/chart/' + ticker);
+        $('status').textContent = JSON.stringify({ok:data.ok, ticker:data.ticker, name:data.name, signals:data.signal_counts, data_source:data.data_source}, null, 2);
+      } catch (err) {
+        $('status').textContent = '오류: ' + (err.message || err);
+      }
+    });
+    loadWatchlist().catch(() => {});
+    loadSectorThemes().catch(() => {});
+    loadUniverseStatus().catch(() => {});
+  </script>
+</body>
+</html>
+"""
+
+
 @app.get("/review-ui", response_class=HTMLResponse)
 def review_ui() -> str:
+    return review_ui_tabler()
     return """
 <!doctype html>
 <html lang="ko">
