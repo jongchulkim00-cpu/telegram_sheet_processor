@@ -100,6 +100,28 @@ function hasStockPriceClaimWithoutTicker(text) {
   return /(?:\uD604\uC7AC\uAC00|\uD604\uC7AC\s*\uC2DC\uC138|current\s*(?:price|quote)).{0,80}?([0-9]{1,3}(?:,[0-9]{3})+|[0-9]+)\s*\uC6D0/i.test(text);
 }
 
+function hasStockPriceClaim(text) {
+  return /(?:\uACF5\uAC1C\s*)?(?:\uD604\uC7AC\uAC00|\uD604\uC7AC\s*\uC2DC\uC138|\uD604\uC7AC\s*\uC8FC\uAC00|current\s*(?:price|quote)|market\s*price|last\s*price).{0,80}?([0-9]{1,3}(?:,[0-9]{3})+|[0-9]+)\s*\uC6D0/i.test(text);
+}
+
+function hasStrategyPriceClaim(text) {
+  return /(?:\uBAA9\uD45C\uAC00|\uC190\uC808\uAC00|\uB9E4\uC218.{0,12}?\uAD6C\uAC04|target\s*price|price\s*target|stop\s*loss|buy.{0,12}?(?:range|zone|area)).{0,100}?([0-9]{1,3}(?:,[0-9]{3})+|[0-9]+)\s*\uC6D0/i.test(text);
+}
+
+function hasDbJsonPayload(text) {
+  return /<json>[\s\S]*?<\/json>/i.test(text) || /```json\s*[\s\S]*?```/i.test(text);
+}
+
+function isTickerMarketBriefing(text, tickers) {
+  return (
+    Array.isArray(tickers) &&
+    tickers.length > 0 &&
+    !hasDbJsonPayload(text) &&
+    !hasStockPriceClaim(text) &&
+    !hasStrategyPriceClaim(text)
+  );
+}
+
 function buildReasonLines(validation, localReasons) {
   const apiReasons = Array.isArray(validation?.blocking_reasons) ? validation.blocking_reasons : [];
   return [...localReasons, ...apiReasons].filter(Boolean).slice(0, 12);
@@ -197,6 +219,26 @@ return await (async () => {
             report_guard_status: "informational_no_ticker",
             expected_analysis_date: expectedDate,
             note: "No stock ticker or stock price claim found; treated as market context, not a per-stock investment report.",
+          },
+          original_report: cleanMessage,
+        },
+      }];
+    }
+
+    if (isTickerMarketBriefing(cleanMessage, allTickers)) {
+      const messageWithDate = ensureDateHeader(cleanMessage);
+      return [{
+        json: {
+          db_data: { symbol: "INFO", score: 0, decision: "MarketContext", target_price: 0, stop_loss: 0 },
+          telegram_message: messageWithDate,
+          can_publish: true,
+          validation: {
+            ok: true,
+            publishable: true,
+            report_guard_status: "informational_ticker_briefing",
+            expected_analysis_date: expectedDate,
+            tickers: allTickers,
+            note: "Ticker briefing without current/target/stop price claims; treated as market context, not a per-stock investment report.",
           },
           original_report: cleanMessage,
         },

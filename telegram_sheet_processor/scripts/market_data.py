@@ -826,6 +826,16 @@ def extract_report_claims(report_text):
     return claims
 
 
+def has_actionable_price_claims(claims):
+    for claim in claims:
+        if any(
+            claim.get(field) is not None
+            for field in ["claimed_price", "buy_low", "buy_high", "target_price", "stop_loss"]
+        ):
+            return True
+    return False
+
+
 def find_report_evidence_warnings(report_text):
     text = normalize_report_text(report_text)
     evidence_words = ["뉴스", "공시", "수주", "센티먼트", "Catalyst", "촉매제", "사상 최대", "컨센서스"]
@@ -962,6 +972,40 @@ def validate_report_text(report_text, days=260, force=False):
             "kiwoom_source": kiwoom_status,
             "kiwoom_rest_source": kiwoom_rest_status,
             "blocking_reasons": ["No 6-digit Korean stock ticker was found in report text."],
+        }
+
+    if claims and not has_actionable_price_claims(claims):
+        stale_report_dates = [item for item in report_analysis_dates if item != today]
+        blocking_reasons = [
+            f"Report analysis date {item.isoformat()} does not match today's KST date {today.isoformat()}."
+            for item in stale_report_dates
+        ]
+        return {
+            "publishable": not blocking_reasons,
+            "report_guard_status": "informational_ticker_briefing" if not blocking_reasons else "blocked",
+            "claims": claims,
+            "report_analysis_dates": [item.isoformat() for item in report_analysis_dates],
+            "expected_analysis_date": today.isoformat(),
+            "price_verification": {
+                "count": 0,
+                "error_count": 0,
+                "results": [],
+                "errors": [],
+            },
+            "evidence_warnings": evidence_warnings,
+            "non_blocking_warnings": evidence_warnings + (
+                [
+                    "Report uses realtime wording, but no price claim is present; treated as market briefing."
+                ]
+                if strict_realtime_wording
+                else []
+            ),
+            "realtime_source": realtime_status,
+            "kiwoom_source": kiwoom_status,
+            "kiwoom_rest_source": kiwoom_rest_status,
+            "realtime_wording": realtime_wording,
+            "strict_realtime_wording": strict_realtime_wording,
+            "blocking_reasons": blocking_reasons,
         }
 
     price_verification = verify_price_claims(claims, days=days, force=force)
