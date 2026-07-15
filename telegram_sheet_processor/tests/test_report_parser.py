@@ -59,6 +59,42 @@ class ReportParserTests(unittest.TestCase):
         self.assertEqual(result["price_verification"]["count"], 0)
         self.assertEqual(result["blocking_reasons"], [])
 
+    def test_strategy_price_on_ticker_line_is_not_claimed_current_price(self):
+        text = (
+            "분석 기준일: 2026-07-15\n"
+            "한미반도체(042700) 종합 신호: 강2\n"
+            "목표가: 100,000원, 손절가: 80,000원\n"
+        )
+
+        claims = market_data.extract_report_claims(text)
+
+        self.assertEqual(len(claims), 1)
+        self.assertIsNone(claims[0]["claimed_price"])
+        self.assertEqual(claims[0]["target_price"], 100000)
+        self.assertEqual(claims[0]["stop_loss"], 80000)
+
+    def test_realtime_data_wording_is_not_strict_realtime_price_claim(self):
+        text = "특정 종목에 대해 상세 지표가 궁금하시다면 즉시 실시간 데이터를 반영하여 보고서를 작성하겠습니다."
+
+        self.assertEqual(market_data.report_claims_strict_realtime_wording(text), [])
+        self.assertTrue(market_data.report_claims_strict_realtime_wording("실시간 현재가: 10,000원"))
+
+    def test_repeated_ticker_merges_later_strategy_segment(self):
+        text = (
+            "분석 기준일: 2026-07-15\n"
+            "후보: 가온칩스(399720), 한미반도체(042700), 제주반도체(080220)\n"
+            "한미반도체(042700)\n"
+            "목표가: 100,000원\n"
+            "손절가: 80,000원\n"
+        )
+
+        claims = market_data.extract_report_claims(text)
+        by_ticker = {row["ticker"]: row for row in claims}
+
+        self.assertIsNone(by_ticker["042700"]["claimed_price"])
+        self.assertEqual(by_ticker["042700"]["target_price"], 100000)
+        self.assertEqual(by_ticker["042700"]["stop_loss"], 80000)
+
 
 if __name__ == "__main__":
     unittest.main()

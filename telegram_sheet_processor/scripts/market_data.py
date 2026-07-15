@@ -706,7 +706,15 @@ def report_claims_realtime_wording(report_text):
 
 def report_claims_strict_realtime_wording(report_text):
     text = normalize_report_text(report_text)
-    patterns = ["\uc2e4\uc2dc\uac04", "real-time", "realtime"]
+    patterns = [
+        "\uc2e4\uc2dc\uac04 \ud604\uc7ac\uac00",
+        "\uc2e4\uc2dc\uac04 \uc2dc\uc138",
+        "\uc2e4\uc2dc\uac04 \uc8fc\uac00",
+        "real-time price",
+        "real-time quote",
+        "realtime price",
+        "realtime quote",
+    ]
     return [pattern for pattern in patterns if pattern.lower() in text.lower()]
 
 def parse_report_date(year, month, day):
@@ -791,32 +799,64 @@ def first_price_in_same_line(text, start_pos=0):
     line = text[line_start:line_end]
     local_start = max(0, start_pos - line_start)
     match = re.search(PRICE_RE, line[local_start:])
-    return parse_won(match.group(1)) if match else None
+    if not match:
+        return None
+    before_price = line[local_start:local_start + match.start()]
+    current_price_label = r"(?:현재\s*(?:시세|가|주가)|현재가|공개\s*현재가|current\s*(?:price|quote)|market\s*price|last\s*price)"
+    if not re.search(current_price_label, before_price, flags=re.IGNORECASE):
+        return None
+    if re.search(FIELD_LABEL_RE, before_price, flags=re.IGNORECASE | re.DOTALL):
+        # FIELD_LABEL_RE also includes current-price labels, so allow only when
+        # the final label before the price is a current-price label.
+        labels = list(re.finditer(FIELD_LABEL_RE, before_price, flags=re.IGNORECASE | re.DOTALL))
+        if labels and not re.search(current_price_label, labels[-1].group(0), flags=re.IGNORECASE):
+            return None
+    return parse_won(match.group(1))
 
 
 def extract_report_claims(report_text):
     text = normalize_report_text(report_text)
     ticker_matches = []
-    seen = set()
     for match in re.finditer(r"\b[0-9]{6}\b", text):
         ticker = match.group(0)
-        if ticker in seen:
-            continue
-        seen.add(ticker)
         ticker_matches.append((ticker, match.start()))
     if not ticker_matches:
         return []
 
-    claims = []
+    ordered_tickers = []
+    for ticker, _start in ticker_matches:
+        if ticker not in ordered_tickers:
+            ordered_tickers.append(ticker)
+
+    segments_by_ticker = {ticker: [] for ticker in ordered_tickers}
     for idx, (ticker, start) in enumerate(ticker_matches):
         end = ticker_matches[idx + 1][1] if idx + 1 < len(ticker_matches) else len(text)
-        segment = text[start:end]
-        fields = extract_claim_fields(segment)
+        segments_by_ticker[ticker].append((start, text[start:end]))
+
+    claims = []
+    for ticker in ordered_tickers:
+        fields = {
+            "claimed_price": None,
+            "buy_low": None,
+            "buy_high": None,
+            "target_price": None,
+            "stop_loss": None,
+        }
+        for start, segment in segments_by_ticker[ticker]:
+            segment_fields = extract_claim_fields(segment)
+            if segment_fields.get("claimed_price") is None:
+                row_price = first_price_in_same_line(text, start)
+                if row_price is not None:
+                    segment_fields["claimed_price"] = row_price
+            for key, value in segment_fields.items():
+                if fields.get(key) is None and value is not None:
+                    fields[key] = value
         if fields.get("claimed_price") is None:
-            row_price = first_price_in_same_line(text, start)
+            first_start = segments_by_ticker[ticker][0][0]
+            row_price = first_price_in_same_line(text, first_start)
             if row_price is not None:
                 fields["claimed_price"] = row_price
-        if all(value is None for value in fields.values()):
+        if len(ordered_tickers) == 1 and all(value is None for value in fields.values()):
             fields = extract_claim_fields(text)
         name = lookup_pykrx_name(ticker) or ticker
         claims.append({
@@ -866,7 +906,15 @@ def report_claims_realtime_wording(report_text):
 
 def report_claims_strict_realtime_wording(report_text):
     text = normalize_report_text(report_text)
-    patterns = ["\uc2e4\uc2dc\uac04", "real-time", "realtime"]
+    patterns = [
+        "\uc2e4\uc2dc\uac04 \ud604\uc7ac\uac00",
+        "\uc2e4\uc2dc\uac04 \uc2dc\uc138",
+        "\uc2e4\uc2dc\uac04 \uc8fc\uac00",
+        "real-time price",
+        "real-time quote",
+        "realtime price",
+        "realtime quote",
+    ]
     return [pattern for pattern in patterns if pattern.lower() in text.lower()]
 
 def extract_report_analysis_dates(report_text):

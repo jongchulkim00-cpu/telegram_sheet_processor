@@ -6,9 +6,11 @@
 const payload = $input.first().json;
 
 function toRows(data) {
+  if (data.can_insert_db === false) return [];
   if (Array.isArray(data.db_rows)) return data.db_rows;
   if (data.result?.db_row) return [data.result.db_row];
   if (Array.isArray(data.results)) return data.results.map((row) => row.db_row || row);
+  if (data.db_data && data.can_insert_db !== false) return [data.db_data];
   return [];
 }
 

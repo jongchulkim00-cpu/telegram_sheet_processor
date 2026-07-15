@@ -220,7 +220,10 @@ return await (async () => {
         json: {
           db_data: { symbol: "BLOCKED", score: 0, decision: "AvoidanceResponse", target_price: 0, stop_loss: 0 },
           telegram_message: messageWithDate,
-          can_publish: false,
+          can_publish: true,
+          can_send_telegram: true,
+          can_insert_db: false,
+          report_publishable: false,
           validation: {
             ok: false,
             publishable: false,
@@ -242,6 +245,9 @@ return await (async () => {
           db_data: { symbol: "INFO", score: 0, decision: "MarketContext", target_price: 0, stop_loss: 0 },
           telegram_message: messageWithDate,
           can_publish: true,
+          can_send_telegram: true,
+          can_insert_db: false,
+          report_publishable: true,
           validation: {
             ok: true,
             publishable: true,
@@ -261,6 +267,9 @@ return await (async () => {
           db_data: { symbol: "INFO", score: 0, decision: "MarketContext", target_price: 0, stop_loss: 0 },
           telegram_message: messageWithDate,
           can_publish: true,
+          can_send_telegram: true,
+          can_insert_db: false,
+          report_publishable: true,
           validation: {
             ok: true,
             publishable: true,
@@ -304,7 +313,10 @@ return await (async () => {
         json: {
           db_data: { symbol: "BLOCKED", score: 0, decision: "Blocked", target_price: 0, stop_loss: 0 },
           telegram_message: correctedMessage(quotes, reasons),
-          can_publish: false,
+          can_publish: true,
+          can_send_telegram: true,
+          can_insert_db: false,
+          report_publishable: false,
           validation,
           blocked_tickers: blockedTickers,
           quotes,
@@ -318,6 +330,9 @@ return await (async () => {
         db_data: dbData,
         telegram_message: cleanMessage,
         can_publish: true,
+        can_send_telegram: true,
+        can_insert_db: !["N/A", "INFO", "BLOCKED", "ERR"].includes(String(dbData.symbol || "")),
+        report_publishable: true,
         validation,
       },
     }];
@@ -326,7 +341,10 @@ return await (async () => {
       json: {
         db_data: { symbol: "ERR", score: 0, decision: "Error", target_price: 0, stop_loss: 0 },
         telegram_message: `\uAC80\uC99D \uC911 \uC624\uB958 \uBC1C\uC0DD: ${error.message}`,
-        can_publish: false,
+        can_publish: true,
+        can_send_telegram: true,
+        can_insert_db: false,
+        report_publishable: false,
       },
     }];
   }
