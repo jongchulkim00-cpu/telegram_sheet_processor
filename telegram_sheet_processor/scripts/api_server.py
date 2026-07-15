@@ -24,6 +24,7 @@ except ImportError:
 
 APP_VERSION = "0.1.0"
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
+_STOCK_UNIVERSE_CACHE: dict[str, Any] = {"rows": None, "generated_at": None, "source": None}
 HOT_TECH_ITEMS = [
     {"ticker": "NVDA", "name": "NVIDIA"},
     {"ticker": "TSLA", "name": "Tesla"},
@@ -37,6 +38,20 @@ ON_DEVICE_AI_ITEMS = [
     {"ticker": "394280", "name": "오픈엣지테크놀로지"},
     {"ticker": "094360", "name": "칩스앤미디어"},
     {"ticker": "432720", "name": "퀄리타스반도체"},
+]
+DEFAULT_KR_ITEMS = [
+    {"ticker": "005930", "name": "삼성전자", "market": "KOSPI"},
+    {"ticker": "000660", "name": "SK하이닉스", "market": "KOSPI"},
+    {"ticker": "005380", "name": "현대차", "market": "KOSPI"},
+    {"ticker": "005490", "name": "POSCO홀딩스", "market": "KOSPI"},
+    {"ticker": "373220", "name": "LG에너지솔루션", "market": "KOSPI"},
+    {"ticker": "042700", "name": "한미반도체", "market": "KOSPI"},
+    {"ticker": "039030", "name": "이오테크닉스", "market": "KOSDAQ"},
+    {"ticker": "080220", "name": "제주반도체", "market": "KOSDAQ"},
+    {"ticker": "399720", "name": "가온칩스", "market": "KOSDAQ"},
+    {"ticker": "011790", "name": "SKC", "market": "KOSPI"},
+    {"ticker": "196170", "name": "알테오젠", "market": "KOSDAQ"},
+    {"ticker": "247540", "name": "에코프로비엠", "market": "KOSDAQ"},
 ]
 
 app = FastAPI(
@@ -261,6 +276,91 @@ def bool_from_payload(payload: dict[str, Any], key: str, default: bool = False) 
     if isinstance(value, str):
         return value.lower() in ["1", "true", "yes", "y"]
     return bool(value)
+
+
+def load_stock_universe(force: bool = False) -> tuple[list[dict[str, Any]], str]:
+    if not force and _STOCK_UNIVERSE_CACHE.get("rows"):
+        return _STOCK_UNIVERSE_CACHE["rows"], str(_STOCK_UNIVERSE_CACHE.get("source") or "cache")
+
+    rows: list[dict[str, Any]] = []
+    source = "fallback"
+    try:
+        from pykrx import stock
+
+        for market in ["KOSPI", "KOSDAQ"]:
+            for ticker in stock.get_market_ticker_list(market=market):
+                name = stock.get_market_ticker_name(ticker)
+                if name:
+                    rows.append({"ticker": ticker, "name": name, "market": market})
+        if rows:
+            source = "pykrx"
+    except Exception:
+        rows = []
+
+    if not rows:
+        rows.extend(DEFAULT_KR_ITEMS)
+        for cache_file in sorted(market_data.CACHE_DIR.glob("*_ohlcv.csv")):
+            ticker = cache_file.name.replace("_ohlcv.csv", "")
+            if not ticker.isdigit() or len(ticker) != 6:
+                continue
+            if any(item["ticker"] == ticker for item in rows):
+                continue
+            rows.append({
+                "ticker": ticker,
+                "name": market_data.lookup_pykrx_name(ticker) or ticker,
+                "market": "UNKNOWN",
+            })
+
+    deduped = {}
+    for row in rows:
+        ticker = str(row.get("ticker") or "").strip()
+        if ticker:
+            deduped[ticker] = {
+                "ticker": ticker,
+                "name": str(row.get("name") or ticker),
+                "market": str(row.get("market") or "UNKNOWN"),
+            }
+    output = sorted(deduped.values(), key=lambda item: (item["market"], item["ticker"]))
+    _STOCK_UNIVERSE_CACHE.update({"rows": output, "generated_at": now_utc(), "source": source})
+    return output, source
+
+
+def search_stock_universe(query: str, limit: int = 20, force: bool = False) -> dict[str, Any]:
+    query = str(query or "").strip()
+    limit = max(1, min(int(limit or 20), 50))
+    rows, source = load_stock_universe(force=force)
+    if not query:
+        return {"query": query, "source": source, "count": 0, "results": []}
+
+    lowered = query.lower()
+    digits = "".join(ch for ch in query if ch.isdigit())
+    scored = []
+    for row in rows:
+        ticker = row["ticker"]
+        name = row["name"]
+        name_lower = name.lower()
+        score = None
+        if ticker == query or name == query:
+            score = 0
+        elif digits and ticker.startswith(digits):
+            score = 1
+        elif name_lower.startswith(lowered):
+            score = 2
+        elif digits and digits in ticker:
+            score = 3
+        elif lowered in name_lower:
+            score = 4
+        if score is not None:
+            scored.append((score, ticker, row))
+    scored.sort(key=lambda item: (item[0], item[1]))
+    results = [item[2] for item in scored[:limit]]
+    return {
+        "query": query,
+        "source": source,
+        "universe_count": len(rows),
+        "count": len(results),
+        "results": results,
+    }
 
 
 def analyze_one(request: AnalyzeRequest) -> dict[str, Any]:
@@ -490,6 +590,14 @@ def cache_audit(tickers: Optional[str] = None) -> dict[str, Any]:
     })
 
 
+@app.get("/stocks/search")
+def stocks_search(q: str = "", limit: int = 20, force: bool = False) -> dict[str, Any]:
+    try:
+        return api_success(search_stock_universe(q, limit=limit, force=force))
+    except Exception as exc:
+        return api_error(exc, {"query": q, "limit": limit})
+
+
 @app.post("/analyze")
 def analyze(request: AnalyzeRequest) -> dict[str, Any]:
     try:
@@ -691,6 +799,13 @@ def review_ui() -> str:
     input, select, button { width:100%; box-sizing:border-box; border:1px solid var(--line); border-radius:6px; padding:10px; font-size:15px; }
     button { background:var(--accent); color:white; border:0; font-weight:700; cursor:pointer; margin-top:14px; }
     button:disabled { opacity:.6; cursor:wait; }
+    .search-wrap { position:relative; }
+    .suggestions { position:absolute; z-index:5; left:0; right:0; top:calc(100% + 4px); border:1px solid var(--line); border-radius:8px; background:white; box-shadow:0 12px 28px rgba(15,23,42,.14); max-height:280px; overflow:auto; display:none; }
+    .suggestion { display:flex; justify-content:space-between; gap:10px; padding:10px 12px; cursor:pointer; border-bottom:1px solid #eef2f7; }
+    .suggestion:hover { background:#eef5ff; }
+    .suggestion strong { font-size:15px; }
+    .suggestion small { color:var(--muted); }
+    .hint { font-size:12px; color:var(--muted); margin-top:6px; }
     .cards { display:grid; grid-template-columns: repeat(4, minmax(120px,1fr)); gap:10px; margin:12px 0; }
     .card { border:1px solid var(--line); border-radius:8px; padding:10px; background:#fbfcff; }
     .card b { display:block; font-size:18px; }
@@ -711,6 +826,12 @@ def review_ui() -> str:
   <main>
     <section>
       <h2>검증 실행</h2>
+      <label>종목 검색</label>
+      <div class="search-wrap">
+        <input id="stockSearch" value="제주반도체" placeholder="예: 한미, 042700, 제주" autocomplete="off" />
+        <div id="suggestions" class="suggestions"></div>
+      </div>
+      <div class="hint">종목명 또는 종목코드를 입력하고 목록에서 선택하세요.</div>
       <label>종목코드</label>
       <input id="ticker" value="080220" placeholder="예: 080220" />
       <label>종목명</label>
@@ -743,6 +864,50 @@ def review_ui() -> str:
   <script>
     const $ = (id) => document.getElementById(id);
     const fmt = (value) => value === null || value === undefined ? "-" : value;
+    let searchTimer = null;
+    function selectStock(item) {
+      $("ticker").value = item.ticker;
+      $("name").value = item.name;
+      $("stockSearch").value = `${item.name} (${item.ticker})`;
+      $("suggestions").style.display = "none";
+    }
+    async function searchStocks(query) {
+      query = query.trim();
+      if (query.length < 1) {
+        $("suggestions").style.display = "none";
+        return;
+      }
+      const response = await fetch(`/stocks/search?q=${encodeURIComponent(query)}&limit=12`);
+      const data = await response.json();
+      const results = data.results || [];
+      if (!data.ok || !results.length) {
+        $("suggestions").innerHTML = `<div class="suggestion"><small>검색 결과 없음</small></div>`;
+        $("suggestions").style.display = "block";
+        return;
+      }
+      $("suggestions").innerHTML = results.map((item) => `
+        <div class="suggestion" data-ticker="${item.ticker}" data-name="${item.name}">
+          <div><strong>${item.name}</strong><br><small>${item.market}</small></div>
+          <small>${item.ticker}</small>
+        </div>
+      `).join("");
+      $("suggestions").style.display = "block";
+    }
+    $("stockSearch").addEventListener("input", () => {
+      clearTimeout(searchTimer);
+      searchTimer = setTimeout(() => searchStocks($("stockSearch").value), 180);
+    });
+    $("stockSearch").addEventListener("focus", () => {
+      if ($("stockSearch").value.trim()) searchStocks($("stockSearch").value);
+    });
+    $("suggestions").addEventListener("click", (event) => {
+      const row = event.target.closest(".suggestion");
+      if (!row || !row.dataset.ticker) return;
+      selectStock({ticker: row.dataset.ticker, name: row.dataset.name, market: ""});
+    });
+    document.addEventListener("click", (event) => {
+      if (!event.target.closest(".search-wrap")) $("suggestions").style.display = "none";
+    });
     function renderStats(stats) {
       const keys = Object.keys(stats || {});
       if (!keys.length) return "<p>신호 통계가 아직 없습니다.</p>";

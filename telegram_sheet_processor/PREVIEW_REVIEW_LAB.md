@@ -16,6 +16,7 @@ Preview / Review Lab은 자동매매 조건을 바로 실전에 쓰기 전에 �
 
 - 일봉 기반 과거 검증
 - 단일 종목 리뷰
+- 종목명/종목코드 검색
 - 50개 이하 배치 리뷰
 - HTML 차트 생성
 - JSON 신호 로그 생성
@@ -62,6 +63,22 @@ Content-Type: application/json
 - `review.decision_summary`: 주요 신호 요약
 - `review.chart_url`: 생성된 차트 URL
 - `review.signals`: 날짜별 신호 로그
+
+### 종목 검색
+
+```http
+GET /stocks/search?q=한미&limit=20
+```
+
+검색 기준:
+
+- 종목코드 정확 일치
+- 종목명 정확 일치
+- 종목코드 앞자리 일치
+- 종목명 앞부분 일치
+- 종목코드/종목명 포함
+
+UI에서는 검색 결과를 선택하면 종목코드와 종목명이 자동으로 채워진다.
 
 ### 배치 리뷰
 

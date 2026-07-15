@@ -27,6 +27,7 @@ python scripts/market_data.py --watchlist data/watchlist.json --days 260 --force
 - 기존 stock-api 8010 서비스 안에서 동작합니다.
 - 별도 포트가 필요하지 않습니다.
 - 단일 종목 및 50개 이하 배치 리뷰를 지원합니다.
+- 종목명/종목코드 검색을 지원합니다. 예: `한미`, `042700`, `042`
 - BUY/PREPARE/REDUCE/AVOID 신호를 차트 위에 표시합니다.
 - 각 신호 이후 10거래일 기준 양수 확률, 평균 수익, 평균 최대 상승/하락을 계산합니다.
 - 현재 버전은 일봉 기반이며, Kiwoom REST 30분봉 데이터 연결 후 실제 진입 타이밍 검증으로 확장합니다.
