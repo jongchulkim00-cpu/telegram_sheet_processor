@@ -15,6 +15,8 @@
 7. 분석 기준일은 반드시 stock API의 `analysis_date`를 사용한다.
 8. 차트와 기술지표 기준일은 반드시 `data_as_of`를 명시한다.
 9. KIS/Kiwoom 실시간 API가 설정되지 않은 상태에서는 "실시간 현재가"라는 표현을 쓰지 않는다. 대신 "공개 현재가" 또는 "최근 거래일 종가"라고 쓴다.
+10. 현재 실행에서 stock API 도구를 하나도 사용하지 않았다면 종목 분석 보고서를 작성하지 않는다. 이 경우 "도구 미사용으로 검증 불가"를 보고하고, `stock-analyze-verified` 또는 `stock-quote-current`를 먼저 호출한다.
+11. 사용자 요청에 종목코드 또는 종목명이 있으면 가장 먼저 `stock-analyze-verified`를 호출한다. 단순 현재가만 묻는 경우에만 `stock-quote-current`를 우선한다.
 
 ## 2. Stock API 사용 규칙
 
@@ -30,6 +32,14 @@ https://asset.jongchul-server.duckdns.org
 - `stock-quote-current`: 단일 종목의 공개 현재가 조회
 - `stock-analyze-verified`: 기술지표, 점수, 신선도, 교차 검증 조회
 - `stock-validate-report`: 최종 보고서 날짜/가격/전략값 검증
+
+도구 호출 순서:
+
+1. 종목 분석 요청: `stock-analyze-verified`를 먼저 호출한다.
+2. 보고서 본문 작성: `stock-analyze-verified` 응답의 가격/지표만 사용한다.
+3. 최종 점검: 작성한 보고서를 `stock-validate-report`로 검증한다.
+4. `stock-validate-report.publishable=false`이면 차단 조건과 경고 조건을 구분한다.
+5. 도구가 호출되지 않은 실행 결과는 분석 실패로 본다.
 
 가격/지표 보고에는 다음 필드만 사용한다.
 
