@@ -814,8 +814,59 @@ def first_price_in_same_line(text, start_pos=0):
     return parse_won(match.group(1))
 
 
+def classify_strategy_side(text):
+    normalized = normalize_report_text(str(text or "")).lower()
+    if re.search(r"\b(?:reduce|sell)\b|비중\s*축소|축소|매도|약\s*[123]", normalized):
+        return "bearish"
+    if re.search(r"\b(?:strong\s*buy|buy|accumulate)\b|강\s*[123]|매수|비중\s*확대|분할\s*매수", normalized):
+        return "bullish"
+    if re.search(r"\b(?:hold|neutral)\b|중\s*[123]|관망|보류", normalized):
+        return "neutral"
+    return "unknown"
+
+
+def extract_json_strategies_by_ticker(text):
+    strategies = {}
+    candidates = []
+    for match in re.finditer(r"<json>([\s\S]*?)</json>", text, flags=re.IGNORECASE):
+        candidates.append(match.group(1))
+    for match in re.finditer(r"```json\s*([\s\S]*?)```", text, flags=re.IGNORECASE):
+        candidates.append(match.group(1))
+
+    def add_strategy(obj):
+        if not isinstance(obj, dict):
+            return
+        symbol = str(obj.get("symbol") or obj.get("ticker") or "").strip()
+        if not re.fullmatch(r"\d{6}", symbol):
+            return
+        decision = obj.get("decision")
+        strategies[symbol] = {
+            "decision": decision,
+            "strategy_side": classify_strategy_side(str(decision or "")),
+            "target_price": obj.get("target_price"),
+            "stop_loss": obj.get("stop_loss"),
+        }
+
+    for candidate in candidates:
+        try:
+            parsed = json.loads(candidate)
+        except Exception:
+            continue
+        if isinstance(parsed, dict) and (parsed.get("symbol") or parsed.get("ticker")):
+            add_strategy(parsed)
+        elif isinstance(parsed, dict):
+            for value in parsed.values():
+                add_strategy(value)
+        elif isinstance(parsed, list):
+            for value in parsed:
+                add_strategy(value)
+    return strategies
+
+
 def extract_report_claims(report_text):
-    text = normalize_report_text(report_text)
+    raw_text = report_text or ""
+    json_strategies = extract_json_strategies_by_ticker(raw_text)
+    text = normalize_report_text(raw_text)
     ticker_matches = []
     for match in re.finditer(r"\b[0-9]{6}\b", text):
         ticker = match.group(0)
@@ -841,6 +892,8 @@ def extract_report_claims(report_text):
             "buy_high": None,
             "target_price": None,
             "stop_loss": None,
+            "decision": None,
+            "strategy_side": None,
         }
         for start, segment in segments_by_ticker[ticker]:
             segment_fields = extract_claim_fields(segment)
@@ -851,13 +904,32 @@ def extract_report_claims(report_text):
             for key, value in segment_fields.items():
                 if fields.get(key) is None and value is not None:
                     fields[key] = value
+            segment_side = classify_strategy_side(segment)
+            if fields.get("strategy_side") is None and segment_side != "unknown":
+                fields["strategy_side"] = segment_side
         if fields.get("claimed_price") is None:
             first_start = segments_by_ticker[ticker][0][0]
             row_price = first_price_in_same_line(text, first_start)
             if row_price is not None:
                 fields["claimed_price"] = row_price
-        if len(ordered_tickers) == 1 and all(value is None for value in fields.values()):
-            fields = extract_claim_fields(text)
+        price_fields = ["claimed_price", "buy_low", "buy_high", "target_price", "stop_loss"]
+        if len(ordered_tickers) == 1 and all(fields.get(key) is None for key in price_fields):
+            report_fields = extract_claim_fields(text)
+            for key, value in report_fields.items():
+                if fields.get(key) is None and value is not None:
+                    fields[key] = value
+            report_side = classify_strategy_side(text)
+            if fields.get("strategy_side") is None and report_side != "unknown":
+                fields["strategy_side"] = report_side
+        if ticker in json_strategies:
+            strategy = json_strategies[ticker]
+            fields["decision"] = strategy.get("decision") or fields.get("decision")
+            fields["strategy_side"] = strategy.get("strategy_side") or fields.get("strategy_side")
+            for key in ["target_price", "stop_loss"]:
+                if strategy.get(key) is not None:
+                    fields[key] = strategy.get(key)
+        if fields.get("strategy_side") is None:
+            fields["strategy_side"] = classify_strategy_side(str(fields.get("decision") or ""))
         name = lookup_pykrx_name(ticker) or ticker
         claims.append({
             "ticker": ticker,
@@ -1111,6 +1183,9 @@ def verify_price_claims(claims, days=260, force=False):
         buy_high = claim.get("buy_high")
         target_price = claim.get("target_price")
         stop_loss = claim.get("stop_loss")
+        strategy_side = claim.get("strategy_side") or classify_strategy_side(claim.get("decision"))
+        if strategy_side not in ["bullish", "bearish", "neutral"]:
+            strategy_side = "unknown"
         if not ticker:
             errors.append({"claim": claim, "error": "ticker is required"})
             continue
@@ -1163,12 +1238,13 @@ def verify_price_claims(claims, days=260, force=False):
                         checks.append(
                             f"Buy range {low:.4f}-{high:.4f} is {gap:.2f}% above verified price {verified_price:.4f}."
                         )
-            if target_price is not None:
+            strategy_requires_upside = strategy_side not in ["bearish", "neutral"]
+            if target_price is not None and strategy_requires_upside:
                 target = float(target_price)
                 if target <= verified_price:
                     tradable = False
                     checks.append(f"Target price {target:.4f} is not above verified price {verified_price:.4f}.")
-            if stop_loss is not None:
+            if stop_loss is not None and strategy_requires_upside:
                 stop = float(stop_loss)
                 if stop >= verified_price:
                     tradable = False
@@ -1188,6 +1264,7 @@ def verify_price_claims(claims, days=260, force=False):
                 "buy_high": buy_high,
                 "target_price": target_price,
                 "stop_loss": stop_loss,
+                "strategy_side": strategy_side,
                 "actual_close": actual_close,
                 "verified_price": verified_price,
                 "verified_price_source": verified_price_source,

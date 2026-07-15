@@ -1,11 +1,13 @@
 import sys
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "scripts"))
 
 import market_data
+import pandas as pd
 
 
 class ReportParserTests(unittest.TestCase):
@@ -94,6 +96,57 @@ class ReportParserTests(unittest.TestCase):
         self.assertIsNone(by_ticker["042700"]["claimed_price"])
         self.assertEqual(by_ticker["042700"]["target_price"], 100000)
         self.assertEqual(by_ticker["042700"]["stop_loss"], 80000)
+
+    def test_reduce_json_marks_strategy_as_bearish(self):
+        text = (
+            "분석 기준일: 2026-07-15\n"
+            "제주반도체(080220) 종합 신호: 약2(비중 축소/Reduce)\n"
+            "목표가: 제시 불가\n"
+            "손절가: 85,000원\n"
+            '<json>{"symbol":"080220","score":33.08,"decision":"Reduce",'
+            '"target_price":null,"stop_loss":85000}</json>'
+        )
+
+        claims = market_data.extract_report_claims(text)
+
+        self.assertEqual(len(claims), 1)
+        self.assertEqual(claims[0]["decision"], "Reduce")
+        self.assertEqual(claims[0]["strategy_side"], "bearish")
+        self.assertIsNone(claims[0]["target_price"])
+        self.assertEqual(claims[0]["stop_loss"], 85000)
+
+    def test_reduce_strategy_does_not_require_upside_target(self):
+        frame = pd.DataFrame(
+            [
+                {"date": pd.Timestamp("2026-07-15"), "open": 87000, "high": 88000, "low": 86000, "close": 87100, "volume": 1000},
+            ]
+        )
+        fetch = market_data.FetchResult(
+            ticker="080220",
+            name="제주반도체",
+            provider="test",
+            frame=frame,
+            cache_path=PROJECT_ROOT / "data" / "cache" / "test.csv",
+            rows=1,
+            warnings=[],
+        )
+        claim = {
+            "ticker": "080220",
+            "name": "제주반도체",
+            "claimed_price": 87100,
+            "target_price": 85000,
+            "stop_loss": 85000,
+            "strategy_side": "bearish",
+        }
+
+        with patch.object(market_data, "fetch_ohlcv", return_value=fetch), \
+             patch.object(market_data, "cross_validate_ohlcv", return_value={"tradable": True, "status": "matched"}), \
+             patch.object(market_data, "fetch_best_current_quote", return_value={"ok": True, "price": 87100, "provider": "test_quote"}):
+            result = market_data.verify_price_claims([claim], force=True)
+
+        self.assertEqual(result["error_count"], 0)
+        self.assertEqual(result["results"][0]["claim_status"], "matched")
+        self.assertTrue(result["results"][0]["tradable"])
 
 
 if __name__ == "__main__":
