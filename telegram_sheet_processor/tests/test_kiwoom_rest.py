@@ -91,6 +91,8 @@ class KiwoomRestTests(unittest.TestCase):
         self.assertEqual(result["price"], 91700)
         self.assertEqual(result["source"], "kiwoom_rest_ka10001")
         self.assertEqual(mock_post.call_count, 2)
+        self.assertEqual(mock_post.call_args_list[0].kwargs["headers"]["api-id"], "au10001")
+        self.assertEqual(mock_post.call_args_list[1].kwargs["headers"]["api-id"], "ka10001")
 
 
 if __name__ == "__main__":

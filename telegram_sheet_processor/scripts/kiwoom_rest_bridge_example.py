@@ -90,7 +90,10 @@ def get_access_token() -> str:
 
     response = requests.post(
         f"{BASE_URL}/oauth2/token",
-        headers={"Content-Type": "application/json;charset=UTF-8"},
+        headers={
+            "Content-Type": "application/json;charset=UTF-8",
+            "api-id": "au10001",
+        },
         json={
             "grant_type": "client_credentials",
             "appkey": APP_KEY,

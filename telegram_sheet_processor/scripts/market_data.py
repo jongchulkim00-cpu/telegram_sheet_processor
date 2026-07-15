@@ -513,7 +513,10 @@ def _get_kiwoom_rest_access_token(status):
 
     response = requests.post(
         f"{status['base_url']}/oauth2/token",
-        headers={"Content-Type": "application/json;charset=UTF-8"},
+        headers={
+            "Content-Type": "application/json;charset=UTF-8",
+            "api-id": "au10001",
+        },
         json={
             "grant_type": "client_credentials",
             "appkey": app_key,
