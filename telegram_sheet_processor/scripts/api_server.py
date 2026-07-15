@@ -812,6 +812,7 @@ def review_ui() -> str:
     .good { color:var(--good); } .warn { color:var(--warn); } .bad { color:var(--bad); }
     iframe { width:100%; height:760px; border:1px solid var(--line); border-radius:8px; background:white; }
     pre { white-space:pre-wrap; word-break:break-word; background:#0f172a; color:#e5e7eb; padding:12px; border-radius:8px; max-height:320px; overflow:auto; }
+    textarea { width:100%; min-height:130px; box-sizing:border-box; border:1px solid var(--line); border-radius:6px; padding:10px; font-size:14px; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
     table { width:100%; border-collapse:collapse; font-size:13px; }
     th, td { border-bottom:1px solid var(--line); padding:7px; text-align:right; }
     th:first-child, td:first-child { text-align:left; }
@@ -855,6 +856,14 @@ def review_ui() -> str:
       <div id="stats"></div>
       <h3>상태</h3>
       <pre id="status">대기 중</pre>
+      <h3>관찰종목 배치 리뷰</h3>
+      <div class="hint">최대 50개. 한 줄에 `종목코드,종목명` 또는 `종목코드` 형식으로 입력합니다.</div>
+      <textarea id="batchItems">080220,제주반도체
+399720,가온칩스
+042700,한미반도체</textarea>
+      <button id="addCurrent" type="button">현재 종목을 배치에 추가</button>
+      <button id="runBatch" type="button">배치 리뷰 실행</button>
+      <div id="batchResults"></div>
     </section>
     <section>
       <h2>차트 리뷰</h2>
@@ -939,6 +948,76 @@ def review_ui() -> str:
         return `<tr><td>${k}</td><td>${fmt(s.count)}</td><td>${fmt(s.positive_end_probability_pct)}%</td><td>${fmt(s.avg_end_return_pct)}%</td><td>${fmt(s.avg_max_gain_pct)}%</td><td>${fmt(s.avg_max_loss_pct)}%</td></tr>`;
       }).join("")}</tbody></table>`;
     }
+    function parseBatchItems() {
+      return $("batchItems").value
+        .split(/\r?\n/)
+        .map((line) => line.trim())
+        .filter(Boolean)
+        .slice(0, 50)
+        .map((line) => {
+          const parts = line.split(/[,\t ]+/).filter(Boolean);
+          return {ticker: parts[0] || "", name: parts.slice(1).join(" ") || ""};
+        })
+        .filter((item) => item.ticker);
+    }
+    function renderBatchResults(results, errors) {
+      if ((!results || !results.length) && (!errors || !errors.length)) {
+        $("batchResults").innerHTML = "<p>배치 결과가 없습니다.</p>";
+        return;
+      }
+      const rows = (results || []).map((review) => {
+        const stats = review.probability_10d || {};
+        const buy = stats.BUY || {};
+        const prepare = stats.PREPARE || {};
+        return `<tr>
+          <td>${review.name}<br><small>${review.ticker}</small></td>
+          <td>${fmt(buy.positive_end_probability_pct)}%</td>
+          <td>${fmt(prepare.positive_end_probability_pct)}%</td>
+          <td>${fmt(buy.count)}</td>
+          <td>${fmt(review.summary && review.summary.REDUCE)}</td>
+          <td><a href="${review.chart_url}" target="_blank">차트</a></td>
+        </tr>`;
+      }).join("");
+      const errorRows = (errors || []).map((error) => `<tr><td>${error.name || error.ticker}<br><small>${error.ticker}</small></td><td colspan="5">${error.error}</td></tr>`).join("");
+      $("batchResults").innerHTML = `<table><thead><tr><th>종목</th><th>BUY 확률</th><th>PREPARE 확률</th><th>BUY 횟수</th><th>REDUCE</th><th>차트</th></tr></thead><tbody>${rows}${errorRows}</tbody></table>`;
+    }
+    $("addCurrent").addEventListener("click", () => {
+      const ticker = $("ticker").value.trim();
+      const name = $("name").value.trim();
+      if (!ticker) return;
+      const line = `${ticker},${name}`;
+      const current = $("batchItems").value.split(/\r?\n/).map((item) => item.trim());
+      if (!current.some((item) => item.startsWith(ticker))) {
+        $("batchItems").value = `${$("batchItems").value.trim()}\n${line}`.trim();
+      }
+    });
+    $("runBatch").addEventListener("click", async () => {
+      const items = parseBatchItems();
+      if (!items.length) {
+        $("batchResults").innerHTML = "<p>배치 입력 종목이 없습니다.</p>";
+        return;
+      }
+      $("runBatch").disabled = true;
+      $("batchResults").innerHTML = "<p>배치 리뷰 실행 중입니다. 종목 수에 따라 시간이 걸릴 수 있습니다.</p>";
+      try {
+        const response = await fetch("/preview-review-batch", {
+          method: "POST",
+          headers: {"Content-Type": "application/json"},
+          body: JSON.stringify({
+            items,
+            days: Number($("days").value),
+            force: $("force").checked
+          })
+        });
+        const data = await response.json();
+        if (!data.ok) throw new Error(data.error || "unknown error");
+        renderBatchResults(data.results || [], data.errors || []);
+      } catch (error) {
+        $("batchResults").innerHTML = `<p>오류: ${error.message}</p>`;
+      } finally {
+        $("runBatch").disabled = false;
+      }
+    });
     $("run").addEventListener("click", async () => {
       $("run").disabled = true;
       $("status").textContent = "실행 중입니다. 데이터 재조회는 시간이 걸릴 수 있습니다.";
