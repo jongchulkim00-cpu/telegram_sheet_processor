@@ -1332,12 +1332,6 @@ def review_ui() -> str:
     input, select, button { width:100%; box-sizing:border-box; border:1px solid var(--line); border-radius:6px; padding:10px; font-size:15px; }
     button { background:var(--accent); color:white; border:0; font-weight:700; cursor:pointer; margin-top:14px; }
     button:disabled { opacity:.6; cursor:wait; }
-    .search-wrap { position:relative; }
-    .suggestions { position:absolute; z-index:5; left:0; right:0; top:calc(100% + 4px); border:1px solid var(--line); border-radius:8px; background:white; box-shadow:0 12px 28px rgba(15,23,42,.14); max-height:280px; overflow:auto; display:none; }
-    .suggestion { display:flex; justify-content:space-between; gap:10px; padding:10px 12px; cursor:pointer; border-bottom:1px solid #eef2f7; }
-    .suggestion:hover { background:#eef5ff; }
-    .suggestion strong { font-size:15px; }
-    .suggestion small { color:var(--muted); }
     .pill { display:inline-block; border-radius:999px; padding:2px 7px; font-size:11px; border:1px solid var(--line); color:var(--muted); margin-top:4px; }
     .pill.good { border-color:#bbf7d0; background:#f0fdf4; color:var(--good); }
     .pill.warn { border-color:#fde68a; background:#fffbeb; color:var(--warn); }
@@ -1367,17 +1361,12 @@ def review_ui() -> str:
   <main>
     <section>
       <h2>검증 실행</h2>
-      <label>종목 검색</label>
-      <div class="search-wrap">
-        <input id="stockSearch" value="제주반도체" placeholder="예: 한미, 042700, 제주" autocomplete="off" />
-        <div id="suggestions" class="suggestions"></div>
-      </div>
-      <div class="hint">종목명 또는 종목코드를 입력한 뒤 Enter를 누르면 최상위 검색 결과가 자동 입력됩니다.</div>
       <div id="universeStatus" class="hint">검색 범위 확인 중</div>
       <label>종목코드</label>
       <input id="ticker" value="080220" placeholder="예: 080220" />
       <label>종목명</label>
       <input id="name" value="제주반도체" placeholder="예: 제주반도체" />
+      <div class="hint">종목명을 입력하고 Enter를 누르면 종목코드가 자동 입력됩니다.</div>
       <label>기간</label>
       <select id="days">
         <option value="120">최근 3~4개월</option>
@@ -1426,30 +1415,24 @@ def review_ui() -> str:
   <script>
     const $ = (id) => document.getElementById(id);
     const fmt = (value) => value === null || value === undefined ? "-" : value;
-    let searchTimer = null;
     function selectStock(item) {
       $("ticker").value = item.ticker;
       $("name").value = item.name;
-      $("stockSearch").value = `${item.name} (${item.ticker})`;
-      $("suggestions").style.display = "none";
     }
-    async function selectBestSearchMatch() {
-      const query = $("stockSearch").value.trim();
+    async function resolveStockFromName() {
+      const query = $("name").value.trim();
       if (!query) return false;
       const response = await fetch(`/stocks/search?q=${encodeURIComponent(query)}&limit=8`);
       const data = await response.json();
       const results = data.results || [];
       if (!data.ok || !results.length) {
-        $("suggestions").innerHTML = `<div class="suggestion"><small>검색 결과 없음</small></div>`;
-        $("suggestions").style.display = "block";
+        $("status").textContent = `종목명 '${query}' 검색 결과가 없습니다. 종목코드를 직접 입력해 주세요.`;
         return false;
       }
       const exact = results.find((item) => item.ticker === query || item.name === query);
-      const digits = query.replace(/\D/g, "");
-      const prefix = digits
-        ? results.find((item) => item.ticker.startsWith(digits))
-        : results.find((item) => item.name.startsWith(query));
+      const prefix = results.find((item) => item.name.startsWith(query));
       selectStock(exact || prefix || results[0]);
+      $("status").textContent = `종목 자동입력 완료: ${$("name").value} (${$("ticker").value})`;
       return true;
     }
     async function autoFillStockFrom(field) {
@@ -1470,32 +1453,6 @@ def review_ui() -> str:
       } catch (_error) {
         // Keep manual input if lookup fails.
       }
-    }
-    async function searchStocks(query) {
-      query = query.trim();
-      if (query.length < 1) {
-        $("suggestions").style.display = "none";
-        return;
-      }
-      const response = await fetch(`/stocks/search?q=${encodeURIComponent(query)}&limit=12&include_quote=true`);
-      const data = await response.json();
-      const results = data.results || [];
-      if (!data.ok || !results.length) {
-        $("suggestions").innerHTML = `<div class="suggestion"><small>검색 결과 없음</small></div>`;
-        $("suggestions").style.display = "block";
-        return;
-      }
-      $("suggestions").innerHTML = results.map((item) => `
-        <div class="suggestion" data-ticker="${item.ticker}" data-name="${item.name}">
-          <div><strong>${item.name}</strong><br><small>${item.market}</small></div>
-          <div style="text-align:right">
-            <small>${item.ticker}</small><br>
-            <span class="pill">${item.primary_theme || "미분류"}</span><br>
-            ${item.quote_price ? `<span class="pill ${item.initial_auto_order_allowed ? "good" : "warn"}">${Number(item.quote_price).toLocaleString()}원 · ${item.initial_auto_order_allowed ? "10만원 가능" : "review only"}</span>` : `<span class="pill">가격 미확인</span>`}
-          </div>
-        </div>
-      `).join("");
-      $("suggestions").style.display = "block";
     }
     async function loadSectorThemes() {
       try {
@@ -1565,37 +1522,20 @@ def review_ui() -> str:
         $("universeStatus").textContent = "검색 범위 확인 실패: " + error.message;
       }
     }
-    $("stockSearch").addEventListener("input", () => {
-      clearTimeout(searchTimer);
-      searchTimer = setTimeout(() => searchStocks($("stockSearch").value), 180);
-    });
-    $("stockSearch").addEventListener("focus", () => {
-      if ($("stockSearch").value.trim()) searchStocks($("stockSearch").value);
-    });
-    $("stockSearch").addEventListener("keydown", async (event) => {
-      if (event.key !== "Enter") return;
-      event.preventDefault();
-      clearTimeout(searchTimer);
-      try {
-        await selectBestSearchMatch();
-      } catch (error) {
-        $("suggestions").innerHTML = `<div class="suggestion"><small>검색 오류: ${error.message}</small></div>`;
-        $("suggestions").style.display = "block";
-      }
-    });
-    $("suggestions").addEventListener("click", (event) => {
-      const row = event.target.closest(".suggestion");
-      if (!row || !row.dataset.ticker) return;
-      selectStock({ticker: row.dataset.ticker, name: row.dataset.name, market: ""});
-    });
     $("ticker").addEventListener("change", () => autoFillStockFrom("ticker"));
     $("ticker").addEventListener("blur", () => autoFillStockFrom("ticker"));
     $("name").addEventListener("change", () => autoFillStockFrom("name"));
     $("name").addEventListener("blur", () => autoFillStockFrom("name"));
-    $("loadRelativeStrength").addEventListener("click", loadRelativeStrength);
-    document.addEventListener("click", (event) => {
-      if (!event.target.closest(".search-wrap")) $("suggestions").style.display = "none";
+    $("name").addEventListener("keydown", async (event) => {
+      if (event.key !== "Enter") return;
+      event.preventDefault();
+      try {
+        await resolveStockFromName();
+      } catch (error) {
+        $("status").textContent = "종목명 자동입력 오류: " + error.message;
+      }
     });
+    $("loadRelativeStrength").addEventListener("click", loadRelativeStrength);
     function renderStats(stats) {
       const keys = Object.keys(stats || {});
       if (!keys.length) return "<p>신호 통계가 아직 없습니다.</p>";
@@ -1725,6 +1665,15 @@ def review_ui() -> str:
       $("run").disabled = true;
       $("status").textContent = "실행 중입니다. 데이터 재조회는 시간이 걸릴 수 있습니다.";
       try {
+        if (!$("ticker").value.trim() && $("name").value.trim()) {
+          const resolved = await resolveStockFromName();
+          if (!resolved) {
+            throw new Error("종목코드가 비어 있고 종목명 자동검색도 실패했습니다.");
+          }
+        }
+        if (!$("ticker").value.trim()) {
+          throw new Error("종목코드를 입력하거나 종목명 입력 후 Enter로 자동입력해 주세요.");
+        }
         const response = await fetch("/preview-review", {
           method: "POST",
           headers: {"Content-Type": "application/json"},

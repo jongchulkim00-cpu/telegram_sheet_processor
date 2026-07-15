@@ -16,8 +16,8 @@ class PreviewReviewApiTests(unittest.TestCase):
         self.assertIn("Preview / Review Lab", html)
         self.assertIn("/preview-review", html)
         self.assertIn("/stocks/search", html)
-        self.assertIn("stockSearch", html)
         self.assertIn("autoFillStockFrom", html)
+        self.assertIn("resolveStockFromName", html)
         self.assertIn("preview-review-batch", html)
         self.assertIn("batchItems", html)
         self.assertIn("review-watchlist", html)
@@ -25,14 +25,15 @@ class PreviewReviewApiTests(unittest.TestCase):
         self.assertIn("saveWatchlist", html)
         self.assertIn("review-sectors", html)
         self.assertIn("loadSectorThemes", html)
-        self.assertIn("selectBestSearchMatch", html)
         self.assertIn("stocks/universe/status", html)
         self.assertIn("universeStatus", html)
         self.assertIn("review-relative-strength", html)
         self.assertIn("loadRelativeStrength", html)
+        self.assertIn("종목명을 입력하고 Enter", html)
+        self.assertNotIn('id="stockSearch"', html)
+        self.assertNotIn("종목 검색</label>", html)
         self.assertNotIn("진행 체크리스트", html)
         self.assertNotIn("loadRoadmap", html)
-        self.assertIn("include_quote=true", html)
         self.assertIn("ticker", html)
         self.assertIn("BUY", html)
         self.assertIn("PREPARE", html)
@@ -61,6 +62,12 @@ class PreviewReviewApiTests(unittest.TestCase):
 
         self.assertGreaterEqual(found["count"], 1)
         self.assertEqual(found["results"][0]["ticker"], "042700")
+
+    def test_stock_search_name_can_resolve_ticker_for_review_ui(self):
+        found = api_server.search_stock_universe("제주반도체", limit=5)
+
+        self.assertGreaterEqual(found["count"], 1)
+        self.assertEqual(found["results"][0]["ticker"], "080220")
 
     def test_stock_universe_status_reports_cached_markets(self):
         status = api_server.stocks_universe_status()
